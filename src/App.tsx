@@ -306,6 +306,7 @@ export default function App() {
                   filters={filters}
                   stage={planStage}
                   onClearStage={() => setPlanStage(null)}
+                  onOpenCafe={(id) => openDrawer({ kind: 'cafe', id })}
                   onOpenIssue={(id) => openDrawer({ kind: 'issue', id })}
                   issues={state.issues}
                 />
@@ -330,7 +331,7 @@ export default function App() {
             </div>
           )}
 
-          {view === 'data' && <DataStatus />}
+          {view === 'data' && <DataStatus onOpenSource={(id) => openDrawer({ kind: 'source', id })} />}
         </main>
       </div>
 

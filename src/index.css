@@ -430,3 +430,7 @@ button.irow:hover { background: var(--hover); }
   .stagelist li { grid-template-columns: minmax(0, 1fr) auto; }
   .stagelist li > .meta { grid-column: 1 / -1; text-align: left; }
 }
+
+/* Focusable record rows use the same affordance across views. */
+.grid tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; box-shadow: none; }
+.grid tr.is-clickable:focus-visible > * { background: var(--hover); }

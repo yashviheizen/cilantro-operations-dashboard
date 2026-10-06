@@ -13,7 +13,7 @@ const CUTOFFS: { key: keyof Site['cutoffs']; label: string }[] = [
   { key: 'storeHandoff', label: 'Store handoff' },
 ];
 
-export function DataStatus() {
+export function DataStatus({ onOpenSource }: { onOpenSource: (id: string) => void }) {
   return (
     <div className="stack">
       <section className="panel" aria-labelledby="src-title">
@@ -28,7 +28,7 @@ export function DataStatus() {
           </thead>
           <tbody>
             {DATA_SOURCES.map((d) => (
-              <tr key={d.id}>
+              <tr key={d.id} className="is-clickable" tabIndex={0} aria-label={`View ${d.name} details`} onClick={() => onOpenSource(d.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenSource(d.id); } }}>
                 <th scope="row">{d.name}</th>
                 <td><AvailabilityBadge a={d.availability} /></td>
                 <td className="meta-ink">{d.lastUpdated ? fmtDateTime(d.lastUpdated) : '—'}</td>

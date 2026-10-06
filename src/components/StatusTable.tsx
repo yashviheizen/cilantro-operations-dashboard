@@ -201,9 +201,9 @@ function SiteTr({ siteId, name, rows, onPick, onOpen }: { siteId: string; name: 
       ? rowBlocker(fallback)
       : { text: 'None', full: 'No open blocker', owner: '—', dueAt: undefined, more: 0 };
   return (
-    <tr>
+    <tr className="is-clickable" tabIndex={0} aria-label={`View ${name} details`} onClick={() => onOpen(siteId)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(siteId); } }}>
       <th scope="row">
-        <button type="button" className="link strong" onClick={() => onPick(siteId)} title={`Filter to ${name}`}>{name}</button>
+        <button type="button" className="link strong" onClick={(e) => { e.stopPropagation(); onPick(siteId); }} title={`Filter to ${name}`}>{name}</button>
         <span className="meta"> · {rows.length} cafes</span>
       </th>
       <td><RowBadge s={status} sub={live.length ? `${ready}/${live.length} ready` : undefined} /></td>
@@ -211,7 +211,7 @@ function SiteTr({ siteId, name, rows, onPick, onOpen }: { siteId: string; name: 
       <td className="truncate" title={b.owner}>{b.owner}</td>
       <td><Due at={b.dueAt} /></td>
       <td>
-        <button type="button" className="icon-btn icon-btn--sm" onClick={() => onOpen(siteId)} aria-label={`View ${name} details`}>
+        <button type="button" className="icon-btn icon-btn--sm" onClick={(e) => { e.stopPropagation(); onOpen(siteId); }} aria-label={`View ${name} details`}>
           <ChevronRight size={16} aria-hidden="true" />
         </button>
       </td>
@@ -223,9 +223,9 @@ function CafeTr({ r, showSite, onOpen }: { r: CafeRow; showSite: boolean; onOpen
   const b = rowBlocker(r);
   const s = rowStatus(r);
   return (
-    <tr className={r.applicable ? '' : 'is-na'}>
+    <tr className={`is-clickable ${r.applicable ? '' : 'is-na'}`} tabIndex={0} aria-label={`View ${r.cafe.name} details`} onClick={() => onOpen(r.cafe.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(r.cafe.id); } }}>
       <th scope="row">
-        <button type="button" className="link strong" onClick={() => onOpen(r.cafe.id)}>{r.cafe.name}</button>
+        <button type="button" className="link strong" onClick={(e) => { e.stopPropagation(); onOpen(r.cafe.id); }}>{r.cafe.name}</button>
         {showSite && <span className="meta"> · {r.site.name}</span>}
       </th>
       <td><RowBadge s={s} /></td>
@@ -233,7 +233,7 @@ function CafeTr({ r, showSite, onOpen }: { r: CafeRow; showSite: boolean; onOpen
       <td className="truncate" title={b.owner}>{b.owner}</td>
       <td><Due at={b.dueAt} /></td>
       <td>
-        <button type="button" className="icon-btn icon-btn--sm" onClick={() => onOpen(r.cafe.id)} aria-label={`View ${r.cafe.name} details`}>
+        <button type="button" className="icon-btn icon-btn--sm" onClick={(e) => { e.stopPropagation(); onOpen(r.cafe.id); }} aria-label={`View ${r.cafe.name} details`}>
           <ChevronRight size={16} aria-hidden="true" />
         </button>
       </td>

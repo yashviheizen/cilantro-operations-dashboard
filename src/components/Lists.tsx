@@ -199,7 +199,7 @@ export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[
           const ack = ackSummary(c);
           const unusual = isUnusualChange(c, settings);
           return (
-            <tr key={c.id} className="is-clickable" onClick={() => onOpen(c.id)}>
+            <tr key={c.id} className="is-clickable" tabIndex={0} aria-label={`View ${changeWhat(c)} change`} onClick={() => onOpen(c.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(c.id); } }}>
               <td className="meta-ink">{fmtDateTime(c.at)}</td>
               <td className="truncate" title={`${cafeById(c.cafeId).name} · ${siteById(c.siteId).name}`}>
                 {cafeById(c.cafeId).name}<span className="meta"> · {siteById(c.siteId).name}</span>
@@ -309,8 +309,8 @@ export function StageRows({ coverage, period, active, onSelect, label }: {
 
 // ---------------------------------------------------------------- weekly planning table
 
-export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue, issues }: {
-  rows: PlanningRow[]; filters: Filters; stage: PlanningStage | null; onClearStage: () => void; onOpenIssue: (id: string) => void; issues: Issue[];
+export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue, onOpenCafe, issues }: {
+  rows: PlanningRow[]; filters: Filters; stage: PlanningStage | null; onClearStage: () => void; onOpenIssue: (id: string) => void; onOpenCafe: (id: string) => void; issues: Issue[];
 }) {
   const week = PROJECTION_WEEKS.find((w) => w.id === filters.weekId)!;
   const shown = stage ? rows.filter((r) => r.stages[stage].status !== 'complete') : rows;
@@ -347,7 +347,7 @@ export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue,
             {shown.map((r) => {
               const issue = issues.find((i) => i.cafeId === r.cafe.id && i.scope.kind === 'week' && i.scope.weekId === filters.weekId && i.status !== 'resolved');
               return (
-                <tr key={r.cafe.id}>
+                <tr key={r.cafe.id} className="is-clickable" tabIndex={0} aria-label={`View ${r.cafe.name} planning details`} onClick={() => onOpenCafe(r.cafe.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenCafe(r.cafe.id); } }}>
                   <th scope="row" className="truncate" title={`${r.cafe.name} · ${r.site.name}`}>
                     {r.cafe.name}<span className="meta"> · {r.site.name}</span>
                   </th>
@@ -359,7 +359,7 @@ export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue,
                   <td>{r.record?.projectedTotal ? fmtQty(r.record.projectedTotal) : <span className="muted">Not submitted</span>}</td>
                   <td className="truncate">
                     {issue ? (
-                      <button type="button" className="link" onClick={() => onOpenIssue(issue.id)} title={issue.title}>
+                      <button type="button" className="link" onClick={(e) => { e.stopPropagation(); onOpenIssue(issue.id); }} title={issue.title}>
                         {issue.short}
                       </button>
                     ) : (

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowLeft, Check, MessageSquarePlus, Play, X } from 'lucide-react';
 import { fmtDateTime, relativeToNow, serviceDateLabel } from '../data/clock';
-import { DISHES, PROJECTION_WEEKS } from '../data/masters';
+import { DATA_SOURCES, DISHES, PROJECTION_WEEKS } from '../data/masters';
 import { ASSIGNABLE, WEEKLY_PLANNING } from '../data/operations';
 import {
   cafeById, cafeRows, DAILY_STAGES, fmtQty, hasDataFor, isUnusualChange, PLANNING_STAGES, planningRows, siteById, STAGE_EXPLAIN, STAGE_LABEL,
@@ -15,7 +15,7 @@ import type { Change, Issue, Quantity } from '../data/types';
 import { AvailabilityBadge, EmptyState, IssueStatusBadge, ProvenanceTag, SeverityBadge, StatusBadge, Term } from './ui';
 import { ackSummary, changeValue, dishName, scopeText, StageRows } from './Lists';
 
-export type DrawerTarget = { kind: 'site' | 'cafe' | 'issue' | 'change'; id: string };
+export type DrawerTarget = { kind: 'site' | 'cafe' | 'issue' | 'change' | 'source'; id: string };
 
 interface Props {
   stack: DrawerTarget[];
@@ -66,8 +66,9 @@ export function Drawer({ stack, onPush, onBack, onClose, state, dispatch, filter
   const issue = top.kind === 'issue' ? state.issues.find((i) => i.id === top.id) : undefined;
   const change = top.kind === 'change' ? state.changes.find((c) => c.id === top.id) : undefined;
   const site = top.kind === 'site' ? siteById(top.id) : undefined;
-  const title = issue?.title ?? (change ? change.kind : site ? site.name : row ? row.cafe.name : 'Details');
-  const kindLabel = top.kind === 'site' ? 'Site' : top.kind === 'cafe' ? `Cafe · ${row?.site.name ?? ''}` : top.kind === 'issue' ? `Issue ${top.id}` : `Change ${top.id}`;
+  const source = top.kind === 'source' ? DATA_SOURCES.find((d) => d.id === top.id) : undefined;
+  const title = source?.name ?? issue?.title ?? (change ? change.kind : site ? site.name : row ? row.cafe.name : 'Details');
+  const kindLabel = top.kind === 'source' ? 'Data source · demo snapshot' : top.kind === 'site' ? 'Site' : top.kind === 'cafe' ? `Cafe · ${row?.site.name ?? ''}` : top.kind === 'issue' ? `Issue ${top.id}` : `Change ${top.id}`;
 
   return (
     <div className="drawer-layer">
@@ -88,11 +89,21 @@ export function Drawer({ stack, onPush, onBack, onClose, state, dispatch, filter
           </button>
         </div>
         <div className="drawer__body">
+          {source && <>
+            <dl className="kv">
+              <div><dt>Availability</dt><dd><AvailabilityBadge a={source.availability} /></dd></div>
+              <div><dt>Last updated</dt><dd>{source.lastUpdated ? fmtDateTime(source.lastUpdated) : 'Not available'}</dd></div>
+              <div><dt>Scope</dt><dd>Shared demo source information across all sites</dd></div>
+            </dl>
+            <Section title="What this source provides"><p>{source.note}</p></Section>
+            <Section title="How to read this status"><p>Availability describes this demo snapshot. It does not confirm a live integration or physical completion. Missing evidence remains unavailable.</p></Section>
+          </>}
+
           {site && <SiteDetail siteId={site.id} filters={filters} state={state} onPush={onPush} />}
           {top.kind === 'cafe' && row && <CafeDetail row={row} filters={filters} state={state} onPush={onPush} />}
           {issue && <IssueDetail key={issue.id} issue={issue} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />}
           {change && <ChangeDetail key={change.id} change={change} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />}
-          {!issue && !change && !site && !(top.kind === 'cafe' && row) && <EmptyState title="Details unavailable" />}
+          {!source && !issue && !change && !site && !(top.kind === 'cafe' && row) && <EmptyState title="Details unavailable" />}
         </div>
       </div>
     </div>
