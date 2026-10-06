@@ -36,17 +36,15 @@ const FOCUSABLE = 'button:not([disabled]), select, input, textarea, [href], [tab
 const tkey = (t: DrawerTarget) => `${t.kind}:${t.id}`;
 const MAX_DEPTH = 7;
 
-/** How many leading stack entries are hierarchy context (site → cafe) that stay visible as their own panels. */
-function contextDepth(stack: DrawerTarget[]): number {
-  if (stack[0]?.kind === 'site') return stack[1]?.kind === 'cafe' ? 2 : 1;
-  return stack[0]?.kind === 'cafe' ? 1 : 0;
-}
+/** Panels kept open: up to two parent panels stay visible as context; anything deeper reuses the third panel. */
+const MAX_CONTEXT = 2;
+const contextDepth = (stack: DrawerTarget[]) => Math.min(stack.length - 1, MAX_CONTEXT);
 
 /**
- * One right-hand drawer. Site and cafe records open as side-by-side panels (site → cafe → detail); the newest
- * panel is the widest. An issue or change opened from the cafe takes a third panel, and records opened from
- * there reuse that panel with a Back action instead of adding more. Other records use a single panel with Back.
- * Nothing here changes the global filters.
+ * One right-hand drawer shared by every page. A related record opens in an adjacent panel so its parent stays
+ * visible (e.g. site → cafe → issue, exception → change → issue); the newest panel is the widest. At most three
+ * panels are expanded: deeper records reuse the third panel with a Back action. Nothing here changes the global
+ * filters — each record shows its own scope.
  */
 export function Drawer({ stack, onStack, onClose, state, dispatch, filters, notify, onFilterStage }: Props) {
   const dialog = useRef<HTMLDivElement>(null);
@@ -140,7 +138,7 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
       }
       case 'cutoff': {
         const c = CUTOFFS.find((x) => x.key === t.id);
-        if (c) return { kind: 'Cutoff rule', title: c.label, ctx: 'All sites · rules as recorded for the demo', crumb: c.label };
+        if (c) return { kind: 'Cutoff rule', title: c.label, ctx: 'All sites · rules as recorded for the demo', crumb: `${c.label} cutoff` };
         break;
       }
       case 'issue': {
@@ -162,6 +160,7 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
     const t = stack[level];
     const onPush = (x: DrawerTarget) => pushAt(level, x);
     const sel = selected ? tkey(selected) : undefined;
+    const parents = stack.slice(0, level).map(tkey);
     switch (t.kind) {
       case 'source': {
         const source = DATA_SOURCES.find((d) => d.id === t.id);
@@ -186,17 +185,17 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
       case 'planning':
         return <PlanningDetail cafeId={t.id} filters={filters} state={state} onPush={onPush} selected={sel} />;
       case 'stage':
-        return <StageDetail k={t.id as StageKey} filters={filters} state={state} onPush={onPush} onFilterStage={onFilterStage} />;
+        return <StageDetail k={t.id as StageKey} filters={filters} state={state} onPush={onPush} onFilterStage={onFilterStage} selected={sel} />;
       case 'cutoff':
-        return <CutoffDetail k={t.id as keyof Site['cutoffs']} />;
+        return <CutoffDetail k={t.id as keyof Site['cutoffs']} onPush={onPush} selected={sel} />;
       case 'issue': {
         const issue = state.issues.find((i) => i.id === t.id);
-        if (issue) return <IssueDetail key={issue.id} issue={issue} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />;
+        if (issue) return <IssueDetail key={issue.id} issue={issue} state={state} dispatch={dispatch} onPush={onPush} notify={notify} selected={sel} parents={parents} />;
         break;
       }
       case 'change': {
         const change = state.changes.find((c) => c.id === t.id);
-        if (change) return <ChangeDetail key={change.id} change={change} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />;
+        if (change) return <ChangeDetail key={change.id} change={change} state={state} dispatch={dispatch} onPush={onPush} notify={notify} selected={sel} parents={parents} />;
         break;
       }
     }
@@ -220,37 +219,7 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
   );
   const prevCrumb = stack.length > 1 ? meta(stack[stack.length - 2]).crumb : '';
 
-  // Single panel for records outside the site → cafe hierarchy (opened from tables, stages, cutoffs…).
-  if (!ctxN) {
-    const m = meta(top);
-    return (
-      <div className="drawer-layer">
-        <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-        <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby={m.ctx ? 'drawer-ctx' : undefined} ref={dialog}>
-          <section className="dpanel dpanel--solo" ref={newest}>
-            <div className="drawer__head">
-              {stack.length > 1 && (
-                <button type="button" className="icon-btn" onClick={() => trim(stack.length - 1)} aria-label={`Back to ${prevCrumb}`}>
-                  <ArrowLeft size={18} aria-hidden="true" />
-                </button>
-              )}
-              <div className="drawer__titles">
-                {stack.length > 1 ? crumbs : <span className="drawer__kind">{m.kind}</span>}
-                <h2 id="drawer-title" tabIndex={-1} ref={newestTitle}>{m.title}</h2>
-                {m.ctx && <span className="drawer__ctx" id="drawer-ctx">{m.ctx}</span>}
-              </div>
-              <button type="button" className="icon-btn" onClick={onClose} aria-label="Close details (Escape)">
-                <X size={18} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="drawer__body">{body(stack.length - 1)}</div>
-          </section>
-        </div>
-      </div>
-    );
-  }
-
-  // Panels: one per context entry, plus one detail panel for whatever was opened from the last context entry.
+  // Panels: one per context entry, plus the newest record (which reuses the last panel for deeper history).
   const panels = stack.slice(0, ctxN).map((_, i) => i);
   if (stack.length > ctxN) panels.push(stack.length - 1);
   const count = panels.length;
@@ -259,7 +228,7 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
   return (
     <div className="drawer-layer">
       <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-      <div className={`drawer drawer--panels drawer--p${count}`} role="dialog" aria-modal="true" aria-labelledby="drawer-title" ref={dialog}>
+      <div className={`drawer drawer--panels drawer--p${count}`} role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby={meta(stack[0]).ctx ? 'drawer-ctx' : undefined} ref={dialog}>
         {panels.map((level, idx) => {
           const t = stack[level];
           const m = meta(t);
@@ -269,7 +238,8 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
           const closeTo = isDetail ? ctxN : level;
           return (
             <section
-              key={isDetail ? 'detail' : tkey(t)}
+              // Parent panels keep their identity (and scroll position) as children open and close.
+              key={idx < MAX_CONTEXT ? tkey(t) : 'detail'}
               className={`dpanel ${isNewest ? 'dpanel--main' : 'dpanel--ctx'}`}
               aria-labelledby={`dp-title-${idx}`}
               ref={isNewest ? newest : undefined}
@@ -289,7 +259,7 @@ export function Drawer({ stack, onStack, onClose, state, dispatch, filters, noti
                 <div className="drawer__titles">
                   {isNewest && idx > 0 ? crumbs : <span className="drawer__kind">{m.kind}</span>}
                   <h2 id={idx === 0 ? 'drawer-title' : `dp-title-${idx}`} tabIndex={-1} ref={isNewest ? newestTitle : undefined}>{m.title}</h2>
-                  {m.ctx && <span className="drawer__ctx">{m.ctx}</span>}
+                  {m.ctx && <span className="drawer__ctx" id={idx === 0 ? 'drawer-ctx' : undefined}>{m.ctx}</span>}
                 </div>
                 {idx === 0 ? (
                   <button type="button" className="icon-btn" onClick={onClose} aria-label={count > 1 ? `Close ${m.title} and all panels` : 'Close details (Escape)'}>
@@ -338,6 +308,24 @@ function NavRow({ target, selected, onOpen, children }: { target: DrawerTarget; 
         <ChevronRight size={16} className="navrow__chev" aria-hidden="true" />
       </button>
     </li>
+  );
+}
+
+/** The cafe (or site) a record belongs to, unless that place is already open in a parent panel. */
+function PlaceLink({ siteId, cafeId, weekly, parents, selected, onPush }: {
+  siteId: string; cafeId?: string; weekly: boolean; parents: string[]; selected?: string; onPush: (t: DrawerTarget) => void;
+}) {
+  const target: DrawerTarget = cafeId ? { kind: weekly ? 'planning' : 'cafe', id: cafeId } : { kind: 'site', id: siteId };
+  if (parents.includes(tkey(target)) || (cafeId && parents.includes(tkey({ kind: weekly ? 'cafe' : 'planning', id: cafeId })))) return null;
+  return (
+    <Section title={cafeId ? 'Cafe' : 'Site'}>
+      <ul className="navlist">
+        <NavRow target={target} selected={selected} onOpen={onPush}>
+          <span className="navrow__name">{cafeId ? cafeById(cafeId).name : siteById(siteId).name}</span>
+          <span className="navrow__meta">{cafeId ? `${siteById(siteId).name} · ${weekly ? 'weekly planning' : 'daily stages, issues and changes'}` : 'Cafes, progress and issues'}</span>
+        </NavRow>
+      </ul>
+    </Section>
   );
 }
 
@@ -641,7 +629,7 @@ function IssueLinks({ issues, onPush, empty, selected }: { issues: Issue[]; onPu
       {issues.map((i) => (
         <NavRow key={i.id} target={{ kind: 'issue', id: i.id }} selected={selected} onOpen={onPush}>
           <span className="navrow__name"><SeverityBadge severity={i.severity} /> {i.short}</span>
-          <span className="navrow__meta">{i.owner.name} · due {fmtDateTime(i.dueAt)}</span>
+          <span className="navrow__meta">{i.status !== 'open' && <IssueStatusBadge status={i.status} />}{i.owner.name} · due {fmtDateTime(i.dueAt)}</span>
         </NavRow>
       ))}
     </ul>
@@ -701,11 +689,14 @@ function PlanningDetail({ cafeId, filters, state, onPush, selected }: { cafeId: 
       <Section title="Weekly changes">
         <ChangeLinks changes={changes} onPush={onPush} selected={selected} />
       </Section>
-      <div className="btn-row">
-        <button type="button" className="btn btn--sm" onClick={() => onPush({ kind: 'cafe', id: cafeId })}>
-          Daily progress for {serviceDateLabel(filters.date)} <ArrowRight size={14} aria-hidden="true" />
-        </button>
-      </div>
+      <Section title="Daily progress">
+        <ul className="navlist">
+          <NavRow target={{ kind: 'cafe', id: cafeId }} selected={selected} onOpen={onPush}>
+            <span className="navrow__name">{cafe.name}</span>
+            <span className="navrow__meta">Daily stages and orders · {serviceDateLabel(filters.date)}</span>
+          </NavRow>
+        </ul>
+      </Section>
     </>
   );
 }
@@ -714,8 +705,8 @@ const STAGE_SHORT_LABEL = (k: StageKey) => STAGE_LABEL[k];
 
 // ---------------------------------------------------------------- stage summary (coverage across cafes in scope)
 
-function StageDetail({ k, filters, state, onPush, onFilterStage }: {
-  k: StageKey; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; onFilterStage: (k: StageKey) => void;
+function StageDetail({ k, filters, state, onPush, onFilterStage, selected }: {
+  k: StageKey; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; onFilterStage: (k: StageKey) => void; selected?: string;
 }) {
   const weekly = (PLANNING_STAGES as StageKey[]).includes(k);
   const hasData = hasDataFor(filters.date);
@@ -765,16 +756,19 @@ function StageDetail({ k, filters, state, onPush, onFilterStage }: {
 
       <Section title={`Affected cafes (${affected.length})`}>
         {affected.length ? (
-          <ul className="stagelist">
-            {affected.map(({ cafe, site, cell }) => (
-              <li key={cafe.id} title={'note' in cell && cell.note ? cell.note : undefined}>
-                <button type="button" className="link strong stagelist__k" onClick={() => onPush({ kind: weekly ? 'planning' : 'cafe', id: cafe.id })}>
-                  {cafe.name} <span className="meta">· {site.name}</span>
-                </button>
-                <StatusBadge status={cell.status} text={cell.text} compact />
-                <span className="meta">{'dueAt' in cell && cell.dueAt ? `Due ${fmtDateTime(cell.dueAt)}` : 'rec' in cell && cell.rec?.dueAt ? `Due ${fmtDateTime(cell.rec.dueAt)}` : ''}</span>
-              </li>
-            ))}
+          <ul className="navlist">
+            {affected.map(({ cafe, site, cell }) => {
+              const due = 'dueAt' in cell && cell.dueAt ? cell.dueAt : 'rec' in cell ? cell.rec?.dueAt : undefined;
+              return (
+                <NavRow key={cafe.id} target={{ kind: weekly ? 'planning' : 'cafe', id: cafe.id }} selected={selected} onOpen={onPush}>
+                  <span className="navrow__name">{cafe.name} <span className="meta">· {site.name}</span></span>
+                  <span className="navrow__meta" title={'note' in cell && cell.note ? cell.note : undefined}>
+                    <StatusBadge status={cell.status} text={cell.text} compact />
+                    {due && <span>Due {fmtDateTime(due)}</span>}
+                  </span>
+                </NavRow>
+              );
+            })}
           </ul>
         ) : (
           <p className="muted">{cov.total ? 'Complete for every cafe in scope.' : 'Nothing to show for this scope.'}</p>
@@ -786,7 +780,7 @@ function StageDetail({ k, filters, state, onPush, onFilterStage }: {
 
 // ---------------------------------------------------------------- cutoff rule across sites
 
-function CutoffDetail({ k }: { k: keyof Site['cutoffs'] }) {
+function CutoffDetail({ k, onPush, selected }: { k: keyof Site['cutoffs']; onPush: (t: DrawerTarget) => void; selected?: string }) {
   const stages = (Object.keys(CUTOFF_KEY) as StageKey[]).filter((s) => CUTOFF_KEY[s] === k);
   return (
     <>
@@ -803,14 +797,24 @@ function CutoffDetail({ k }: { k: keyof Site['cutoffs'] }) {
           </li>
         ))}
       </ul>
+      <Section title="Stages using this cutoff">
+        <ul className="navlist">
+          {stages.map((s) => (
+            <NavRow key={s} target={{ kind: 'stage', id: s }} selected={selected} onOpen={onPush}>
+              <span className="navrow__name">{STAGE_LABEL[s]}</span>
+              <span className="navrow__meta">{PLANNING_STAGES.includes(s as never) ? 'Weekly stage' : 'Daily stage'} · progress in the current dashboard scope</span>
+            </NavRow>
+          ))}
+        </ul>
+      </Section>
     </>
   );
 }
 
 // ---------------------------------------------------------------- issue
 
-function IssueDetail({ issue, state, dispatch, onPush, notify }: {
-  issue: Issue; state: DemoState; dispatch: (a: Action) => void; onPush: (t: DrawerTarget) => void; notify: (m: string) => void;
+function IssueDetail({ issue, state, dispatch, onPush, notify, selected, parents }: {
+  issue: Issue; state: DemoState; dispatch: (a: Action) => void; onPush: (t: DrawerTarget) => void; notify: (m: string) => void; selected?: string; parents: string[];
 }) {
   const [note, setNote] = useState('');
   const [closure, setClosure] = useState('');
@@ -864,24 +868,26 @@ function IssueDetail({ issue, state, dispatch, onPush, notify }: {
       {related.length > 0 && (
         <Section title="Related changes & team acknowledgments">
           {related.map((c) => (
-            <ChangeAcks key={c.id} change={c} dispatch={dispatch} notify={notify} onOpen={() => onPush({ kind: 'change', id: c.id })} />
+            <div key={c.id} className="relchange">
+              <ul className="navlist">
+                <NavRow target={{ kind: 'change', id: c.id }} selected={selected} onOpen={onPush}>
+                  <span className="navrow__name">{c.kind}: {c.dishId ? dishName(c.dishId) : c.record}</span>
+                  <span className="navrow__meta">{c.id} · {changeValue(c).prev} → {changeValue(c).next} · {fmtDateTime(c.at)}</span>
+                </NavRow>
+              </ul>
+              <ChangeAcks change={c} dispatch={dispatch} notify={notify} />
+            </div>
           ))}
         </Section>
       )}
 
       {relIssues.length > 0 && (
         <Section title="Related issues">
-          <ul className="links">
-            {relIssues.map((i) => (
-              <li key={i.id}>
-                <button type="button" className="btn btn--link" data-target={`issue:${i.id}`} onClick={() => onPush({ kind: 'issue', id: i.id })}>
-                  <SeverityBadge severity={i.severity} /> {i.title}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <IssueLinks issues={relIssues} onPush={onPush} selected={selected} empty="" />
         </Section>
       )}
+
+      <PlaceLink siteId={issue.siteId} cafeId={issue.cafeId} weekly={PLANNING_STAGES.includes(issue.stage as never)} parents={parents} selected={selected} onPush={onPush} />
 
       <Section title="Evidence">
         <ul className="evidence">
@@ -1039,15 +1045,9 @@ function IngredientTable({ dishId, delta }: { dishId: string; delta: Quantity })
   );
 }
 
-function ChangeAcks({ change, dispatch, notify, onOpen }: { change: Change; dispatch: (a: Action) => void; notify: (m: string) => void; onOpen?: () => void }) {
-  const v = changeValue(change);
+function ChangeAcks({ change, dispatch, notify }: { change: Change; dispatch: (a: Action) => void; notify: (m: string) => void }) {
   return (
     <div className="ackbox">
-      {onOpen && (
-        <button type="button" className="btn btn--link" data-target={`change:${change.id}`} onClick={onOpen}>
-          {change.id}: {change.dishId ? dishName(change.dishId) : change.record} {v.prev} → {v.next}
-        </button>
-      )}
       {change.acknowledgments.length ? (
         <ul className="acks">
           {change.acknowledgments.map((a) => (
@@ -1085,8 +1085,8 @@ function ChangeAcks({ change, dispatch, notify, onOpen }: { change: Change; disp
 
 // ---------------------------------------------------------------- change
 
-function ChangeDetail({ change, state, dispatch, onPush, notify }: {
-  change: Change; state: DemoState; dispatch: (a: Action) => void; onPush: (t: DrawerTarget) => void; notify: (m: string) => void;
+function ChangeDetail({ change, state, dispatch, onPush, notify, selected, parents }: {
+  change: Change; state: DemoState; dispatch: (a: Action) => void; onPush: (t: DrawerTarget) => void; notify: (m: string) => void; selected?: string; parents: string[];
 }) {
   const [reason, setReason] = useState('');
   const v = changeValue(change);
@@ -1148,11 +1148,11 @@ function ChangeDetail({ change, state, dispatch, onPush, notify }: {
 
       {issue && (
         <Section title="Related issue">
-          <button type="button" className="btn btn--link" data-target={`issue:${issue.id}`} onClick={() => onPush({ kind: 'issue', id: issue.id })}>
-            <SeverityBadge severity={issue.severity} /> {issue.title} · <IssueStatusBadge status={issue.status} />
-          </button>
+          <IssueLinks issues={[issue]} onPush={onPush} selected={selected} empty="" />
         </Section>
       )}
+
+      <PlaceLink siteId={change.siteId} cafeId={change.cafeId} weekly={change.record === 'Weekly projection' || change.record === 'Menu plan'} parents={parents} selected={selected} onPush={onPush} />
 
       {!change.reason && (
         <Section title="Record reason">

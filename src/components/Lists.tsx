@@ -1,4 +1,4 @@
-import { CircleCheck, X } from 'lucide-react';
+import { ChevronRight, CircleCheck, X } from 'lucide-react';
 import { fmtDate, fmtDateTime, isPast, relativeToNow } from '../data/clock';
 import { DISHES, PROJECTION_WEEKS } from '../data/masters';
 import {
@@ -42,7 +42,7 @@ export function IssueRows({ issues, onOpen, label }: { issues: Issue[]; onOpen: 
   return (
     <div className="irows">
       <div className="irow irow--head" aria-hidden="true">
-        <span>Severity</span><span>Issue</span><span>Site / cafe</span><span>Owner</span><span>Due</span><span>Status</span>
+        <span>Severity</span><span>Issue</span><span>Site / cafe</span><span>Owner</span><span>Due</span><span>Status</span><span />
       </div>
       <ul aria-label={label}>
         {issues.map((i) => {
@@ -70,6 +70,7 @@ export function IssueRows({ issues, onOpen, label }: { issues: Issue[]; onOpen: 
                   <IssueStatusBadge status={i.status} />
                   {i.acknowledged && i.status !== 'resolved' && <span className="ackmark" title="Acknowledged">Ack</span>}
                 </span>
+                <ChevronRight size={16} className="rowchev" aria-hidden="true" />
               </button>
             </li>
           );
@@ -254,6 +255,7 @@ export function ChangesPreview({ changes, onOpen }: { changes: Change[]; onOpen:
               <span className="truncate">{changeWhat(c)} <span className="meta">· {cafeById(c.cafeId).name}</span></span>
               <span className="delta truncate"><span className="old">{v.prev}</span> → <strong>{v.next}</strong></span>
               {c.late ? <span className="flag flag--review">Late</span> : <span />}
+              <ChevronRight size={16} className="rowchev" aria-hidden="true" />
             </button>
           </li>
         );
