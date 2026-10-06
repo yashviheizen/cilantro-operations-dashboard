@@ -1,55 +1,91 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowLeft, Check, MessageSquarePlus, Play, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, MessageSquarePlus, Play, X } from 'lucide-react';
 import { fmtDateTime, relativeToNow, serviceDateLabel } from '../data/clock';
-import { DATA_SOURCES, DISHES, PROJECTION_WEEKS } from '../data/masters';
+import { DATA_SOURCES, DISHES, PROJECTION_WEEKS, SITES } from '../data/masters';
 import { ASSIGNABLE, WEEKLY_PLANNING } from '../data/operations';
 import {
   cafeById, cafeRows, DAILY_STAGES, fmtQty, hasDataFor, isUnusualChange, PLANNING_STAGES, planningRows, siteById, STAGE_EXPLAIN, STAGE_LABEL,
   stageStatus, stageText, resolvedSet, workflowCoverage, rowStatus, rowBlocker, ROW_STATUS, REQUIRED_STAGES, deadlineFor,
+  changesInScope, CUTOFF_KEY, STAGE_OWNER_ROLE, worst, worstRowStatus, bySeverity,
 } from '../lib/derive';
 import type { CafeRow, Filters } from '../lib/derive';
 import { estimateIngredients } from '../lib/ingredients';
 import type { Action, DemoState } from '../lib/store';
-import type { Change, Issue, Quantity } from '../data/types';
+import type { Change, Issue, Quantity, Site, StageKey } from '../data/types';
 import { AvailabilityBadge, EmptyState, IssueStatusBadge, ProvenanceTag, SeverityBadge, StatusBadge, Term } from './ui';
-import { ackSummary, changeValue, dishName, scopeText, StageRows } from './Lists';
+import { ackSummary, changeValue, dishName, scopeText, stageBreakdown, StageRows } from './Lists';
+import { CUTOFFS } from './DataStatus';
 
-export type DrawerTarget = { kind: 'site' | 'cafe' | 'issue' | 'change' | 'source'; id: string };
+export type DrawerTarget = { kind: 'site' | 'cafe' | 'planning' | 'stage' | 'cutoff' | 'issue' | 'change' | 'source'; id: string };
 
 interface Props {
   stack: DrawerTarget[];
   onPush: (t: DrawerTarget) => void;
-  onBack: () => void;
+  /** Keep the first n entries of the stack (n ≥ 1). */
+  onTrim: (n: number) => void;
   onClose: () => void;
   state: DemoState;
   dispatch: (a: Action) => void;
   filters: Filters;
   row?: CafeRow;
   notify: (msg: string) => void;
+  /** Filter the overview to one site and close the drawer. */
+  onViewCafes: (siteId: string) => void;
+  /** Apply a stage filter (daily → overview table, weekly → planning table) and close the drawer. */
+  onFilterStage: (k: StageKey) => void;
 }
 
-export function Drawer({ stack, onPush, onBack, onClose, state, dispatch, filters, row, notify }: Props) {
-  const panel = useRef<HTMLDivElement>(null);
-  const closeBtn = useRef<HTMLButtonElement>(null);
-  const top = stack[stack.length - 1];
+const FOCUSABLE = 'button:not([disabled]), select, input, textarea, [href], [tabindex]:not([tabindex="-1"])';
+const tkey = (t: DrawerTarget) => `${t.kind}:${t.id}`;
 
+/**
+ * One right-hand drawer. A site opened at the root shows its cafes; picking a cafe splits the drawer into
+ * a compact site panel (left) and the cafe panel (right). Deeper issue/change details replace the right panel
+ * content rather than adding more panels. Nothing here changes the global filters.
+ */
+export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filters, row, notify, onViewCafes, onFilterStage }: Props) {
+  const dialog = useRef<HTMLDivElement>(null);
+  const closeBtn = useRef<HTMLButtonElement>(null);
+  const childPanel = useRef<HTMLElement>(null);
+  const childTitle = useRef<HTMLHeadingElement>(null);
+  const popped = useRef<DrawerTarget | null>(null);
+  const top = stack[stack.length - 1];
+  const split = stack.length > 1 && stack[0].kind === 'site';
+
+  const trim = (n: number) => {
+    popped.current = stack[n] ?? null;
+    onTrim(n);
+  };
+  const back = () => (stack.length > 1 ? trim(stack.length - 1) : onClose());
+
+  // Focus follows the panel that changed: into a newly opened detail, or back to the item that opened it.
   useEffect(() => {
-    closeBtn.current?.focus();
-    panel.current?.scrollTo({ top: 0 });
-  }, [top?.kind, top?.id]);
+    const p = popped.current;
+    popped.current = null;
+    const returnTo = p && dialog.current?.querySelector<HTMLElement>(`[data-target="${tkey(p)}"]`);
+    if (returnTo) returnTo.focus();
+    else if (split) {
+      childPanel.current?.scrollTo({ top: 0 });
+      childTitle.current?.focus({ preventScroll: true });
+    } else {
+      closeBtn.current?.focus();
+      dialog.current?.scrollTo({ top: 0 });
+    }
+  }, [top?.kind, top?.id, stack.length, split]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
-      } else if (e.key === 'Tab' && panel.current) {
-        const f = panel.current.querySelectorAll<HTMLElement>('button:not([disabled]), select, input, textarea, [href], [tabindex]:not([tabindex="-1"])');
+        if (stack.length > 1) trim(stack.length - 1);
+        else onClose();
+      } else if (e.key === 'Tab' && dialog.current) {
+        const f = [...dialog.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
         if (!f.length) return;
         const first = f[0];
         const last = f[f.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
+        if (e.shiftKey && (document.activeElement === first || !dialog.current.contains(document.activeElement))) {
           e.preventDefault();
           last.focus();
         } else if (!e.shiftKey && document.activeElement === last) {
@@ -60,52 +96,186 @@ export function Drawer({ stack, onPush, onBack, onClose, state, dispatch, filter
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  });
 
   if (!top) return null;
-  const issue = top.kind === 'issue' ? state.issues.find((i) => i.id === top.id) : undefined;
-  const change = top.kind === 'change' ? state.changes.find((c) => c.id === top.id) : undefined;
-  const site = top.kind === 'site' ? siteById(top.id) : undefined;
-  const source = top.kind === 'source' ? DATA_SOURCES.find((d) => d.id === top.id) : undefined;
-  const title = source?.name ?? issue?.title ?? (change ? change.kind : site ? site.name : row ? row.cafe.name : 'Details');
-  const kindLabel = top.kind === 'source' ? 'Data source · demo snapshot' : top.kind === 'site' ? 'Site' : top.kind === 'cafe' ? `Cafe · ${row?.site.name ?? ''}` : top.kind === 'issue' ? `Issue ${top.id}` : `Change ${top.id}`;
+  const week = PROJECTION_WEEKS.find((w) => w.id === filters.weekId)?.label ?? filters.weekId;
+  const day = `${serviceDateLabel(filters.date)} · ${filters.meal === 'All' ? 'all meals' : filters.meal}`;
+  const place = filters.siteId === 'all' ? 'All sites' : filters.cafeId === 'all' ? siteById(filters.siteId).name : `${siteById(filters.siteId).name} · ${cafeById(filters.cafeId).name}`;
+
+  /** Header text for one drawer entry. */
+  const meta = (t: DrawerTarget): { kind: string; title: string; ctx: string; crumb: string } | null => {
+    switch (t.kind) {
+      case 'source': {
+        const d = DATA_SOURCES.find((x) => x.id === t.id);
+        return d ? { kind: 'Data source', title: d.name, ctx: 'All sites · demo snapshot', crumb: d.name } : null;
+      }
+      case 'site': {
+        const st = siteById(t.id);
+        return { kind: 'Site', title: st.name, ctx: `${st.region} · ${day}`, crumb: st.name };
+      }
+      case 'cafe': {
+        const c = cafeById(t.id);
+        return { kind: 'Cafe', title: c.name, ctx: `${siteById(c.siteId).name} · ${day}`, crumb: c.name };
+      }
+      case 'planning': {
+        const c = cafeById(t.id);
+        return { kind: 'Weekly planning', title: c.name, ctx: `${siteById(c.siteId).name} · projection week ${week}`, crumb: `${c.name} planning` };
+      }
+      case 'stage': {
+        const k = t.id as StageKey;
+        const weekly = PLANNING_STAGES.includes(k as never);
+        return { kind: weekly ? 'Weekly stage' : 'Daily stage', title: STAGE_LABEL[k], ctx: `${place} · ${weekly ? `projection week ${week}` : day}`, crumb: STAGE_LABEL[k] };
+      }
+      case 'cutoff': {
+        const c = CUTOFFS.find((x) => x.key === t.id);
+        return c ? { kind: 'Cutoff rule', title: c.label, ctx: 'All sites · rules as recorded for the demo', crumb: c.label } : null;
+      }
+      case 'issue': {
+        const i = state.issues.find((x) => x.id === t.id);
+        return i ? { kind: `Issue ${i.id}`, title: i.title, ctx: scopeText(i.scope, i.siteId, i.cafeId), crumb: `Issue ${i.id}` } : null;
+      }
+      case 'change': {
+        const c = state.changes.find((x) => x.id === t.id);
+        return c ? { kind: `Change ${c.id}`, title: c.kind, ctx: scopeText(c.scope, c.siteId, c.cafeId), crumb: `Change ${c.id}` } : null;
+      }
+    }
+  };
+
+  /** Body for one drawer entry. `selected` highlights the cafe open beside a site panel. */
+  const body = (t: DrawerTarget, selected?: string) => {
+    switch (t.kind) {
+      case 'source': {
+        const source = DATA_SOURCES.find((d) => d.id === t.id);
+        if (!source) break;
+        return <>
+          <dl className="kv">
+            <div><dt>Availability</dt><dd><AvailabilityBadge a={source.availability} /></dd></div>
+            <div><dt>Last updated</dt><dd>{source.lastUpdated ? fmtDateTime(source.lastUpdated) : 'Not available'}</dd></div>
+            <div><dt>Scope</dt><dd>All sites and cafes in this demo (one shared source)</dd></div>
+          </dl>
+          <Section title="Coverage & limitations"><p>{source.note}</p></Section>
+          <Section title="How to read this status"><p>Availability describes this demo snapshot. It does not confirm a live integration or physical completion. Missing evidence remains unavailable.</p></Section>
+        </>;
+      }
+      case 'site':
+        return <SiteDetail siteId={t.id} filters={filters} state={state} onPush={onPush} onViewCafes={onViewCafes} selected={selected} compact={!!selected} />;
+      case 'cafe':
+        if (row && row.cafe.id === t.id) return <CafeDetail row={row} filters={filters} state={state} onPush={onPush} />;
+        break;
+      case 'planning':
+        return <PlanningDetail cafeId={t.id} filters={filters} state={state} onPush={onPush} />;
+      case 'stage':
+        return <StageDetail k={t.id as StageKey} filters={filters} state={state} onPush={onPush} onFilterStage={onFilterStage} />;
+      case 'cutoff':
+        return <CutoffDetail k={t.id as keyof Site['cutoffs']} />;
+      case 'issue': {
+        const issue = state.issues.find((i) => i.id === t.id);
+        if (issue) return <IssueDetail key={issue.id} issue={issue} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />;
+        break;
+      }
+      case 'change': {
+        const change = state.changes.find((c) => c.id === t.id);
+        if (change) return <ChangeDetail key={change.id} change={change} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />;
+        break;
+      }
+    }
+    return <EmptyState title="Details unavailable" />;
+  };
+
+  const topMeta = meta(top) ?? { kind: 'Details', title: 'Details', ctx: '', crumb: 'Details' };
+
+  if (split) {
+    const parent = stack[0];
+    const pMeta = meta(parent)!;
+    const selectedCafe = stack[1].kind === 'cafe' ? stack[1].id : undefined;
+    return (
+      <div className="drawer-layer">
+        <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
+        <div className="drawer drawer--split" role="dialog" aria-modal="true" aria-labelledby="drawer-title drawer-child-title" ref={dialog}>
+          <section className="dpanel dpanel--parent" aria-labelledby="drawer-title">
+            <div className="drawer__head">
+              <div className="drawer__titles">
+                <span className="drawer__kind">{pMeta.kind}</span>
+                <h2 id="drawer-title">{pMeta.title}</h2>
+                <span className="drawer__ctx">{pMeta.ctx}</span>
+              </div>
+              <button type="button" className="icon-btn" onClick={onClose} ref={closeBtn} aria-label={`Close ${pMeta.title} details (closes both panels)`}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="drawer__body">{body(parent, selectedCafe ?? '')}</div>
+          </section>
+
+          <section className="dpanel dpanel--child" aria-labelledby="drawer-child-title" ref={childPanel}>
+            <div className="drawer__head">
+              <button type="button" className="btn btn--sm dpanel__back" onClick={() => trim(1)}>
+                <ArrowLeft size={14} aria-hidden="true" /> Back to {pMeta.title}
+              </button>
+              <div className="drawer__titles">
+                <nav className="dcrumbs" aria-label="Drawer location">
+                  <ol>
+                    {stack.map((t, i) => {
+                      const m = meta(t);
+                      const last = i === stack.length - 1;
+                      return (
+                        <li key={tkey(t)}>
+                          {last ? (
+                            <span aria-current="page">{m?.crumb ?? 'Details'}</span>
+                          ) : (
+                            <button type="button" className="link" onClick={() => trim(i + 1)} data-target={i > 0 ? tkey(t) : undefined}>{m?.crumb}</button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </nav>
+                <h2 id="drawer-child-title" tabIndex={-1} ref={childTitle}>{topMeta.title}</h2>
+                <span className="drawer__ctx">{topMeta.ctx}</span>
+              </div>
+              <button type="button" className="icon-btn dpanel__close" onClick={() => trim(1)} aria-label={`Close ${meta(stack[1])?.crumb ?? 'detail'} panel (Escape)`}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="drawer__body">{body(top)}</div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="drawer-layer">
       <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-      <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" ref={panel}>
+      <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby={topMeta.ctx ? 'drawer-ctx' : undefined} ref={dialog}>
         <div className="drawer__head">
           {stack.length > 1 && (
-            <button type="button" className="icon-btn" onClick={onBack} aria-label="Back to previous detail">
+            <button type="button" className="icon-btn" onClick={back} aria-label={`Back to ${meta(stack[stack.length - 2])?.crumb ?? 'previous detail'}`}>
               <ArrowLeft size={18} aria-hidden="true" />
             </button>
           )}
           <div className="drawer__titles">
-            <span className="drawer__kind">{kindLabel}</span>
-            <h2 id="drawer-title">{title}</h2>
+            <span className="drawer__kind">{topMeta.kind}</span>
+            <h2 id="drawer-title">{topMeta.title}</h2>
+            {topMeta.ctx && <span className="drawer__ctx" id="drawer-ctx">{topMeta.ctx}</span>}
           </div>
           <button type="button" className="icon-btn" onClick={onClose} ref={closeBtn} aria-label="Close details (Escape)">
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <div className="drawer__body">
-          {source && <>
-            <dl className="kv">
-              <div><dt>Availability</dt><dd><AvailabilityBadge a={source.availability} /></dd></div>
-              <div><dt>Last updated</dt><dd>{source.lastUpdated ? fmtDateTime(source.lastUpdated) : 'Not available'}</dd></div>
-              <div><dt>Scope</dt><dd>Shared demo source information across all sites</dd></div>
-            </dl>
-            <Section title="What this source provides"><p>{source.note}</p></Section>
-            <Section title="How to read this status"><p>Availability describes this demo snapshot. It does not confirm a live integration or physical completion. Missing evidence remains unavailable.</p></Section>
-          </>}
-
-          {site && <SiteDetail siteId={site.id} filters={filters} state={state} onPush={onPush} />}
-          {top.kind === 'cafe' && row && <CafeDetail row={row} filters={filters} state={state} onPush={onPush} />}
-          {issue && <IssueDetail key={issue.id} issue={issue} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />}
-          {change && <ChangeDetail key={change.id} change={change} state={state} dispatch={dispatch} onPush={onPush} notify={notify} />}
-          {!source && !issue && !change && !site && !(top.kind === 'cafe' && row) && <EmptyState title="Details unavailable" />}
-        </div>
+        <div className="drawer__body">{body(top)}</div>
       </div>
+    </div>
+  );
+}
+
+/** Status, blocker, owner and next action — always the first block in a record drawer. */
+function StatusBlock({ badge, lines, next, children }: { badge: ReactNode; lines?: ReactNode; next?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="drawer__status">
+      <div className="drawer__status-row">{badge}{lines}</div>
+      {next && <p className="drawer__next">{next}</p>}
+      {children}
     </div>
   );
 }
@@ -131,14 +301,21 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
   const changes = state.changes.filter((c) => c.cafeId === row.cafe.id && (c.scope.kind === 'week' ? c.scope.weekId === filters.weekId : c.scope.date === filters.date));
   const weekIssues = state.issues.filter((i) => i.cafeId === row.cafe.id && i.scope.kind === 'week' && i.scope.weekId === filters.weekId && i.status !== 'resolved');
 
+  const s = rowStatus(row);
+  const b = rowBlocker(row);
   return (
     <>
+      <StatusBlock
+        badge={<StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} />}
+        lines={<span className="meta">{row.applicable ? `Blocker: ${b.full}` : row.naReason}</span>}
+        next={row.applicable && !row.ready ? <><strong>Next:</strong> {row.next.text} · {row.next.owner}{row.next.dueAt && ` · due ${fmtDateTime(row.next.dueAt)}`}</> : row.applicable ? <>No preparation step outstanding. Store handoff and dispatch are tracked separately below.</> : <>Closed or not served — no orders are expected and no missing-order alerts are raised.</>}
+      />
       <dl className="kv">
         <div><dt>Site</dt><dd>{row.site.name} · {row.site.region}</dd></div>
         <div><dt>Kitchen</dt><dd>{row.site.arrangement} — {row.site.kitchen}</dd></div>
         <div><dt>Service date</dt><dd>{serviceDateLabel(filters.date)}</dd></div>
         <div><dt>Meals</dt><dd>{row.applicable ? row.meals.join(', ') : `Not applicable — ${row.naReason}`}</dd></div>
-        <div><dt>Readiness</dt><dd>{!row.applicable ? <StatusBadge status="not_applicable" /> : row.ready ? <StatusBadge status="complete" text="Ready" /> : <StatusBadge status="pending" text="Not ready" />}</dd></div>
+        <div><dt>Preparation ready</dt><dd>{!row.applicable ? 'Not applicable' : row.ready ? 'Yes — not a dispatch or delivery confirmation' : 'No'}</dd></div>
       </dl>
 
       <Section title="Open issues">
@@ -179,7 +356,7 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
         )}
       </Section>
 
-      <Section title={`Weekly stages · ${PROJECTION_WEEKS.find((w) => w.id === filters.weekId)?.label ?? filters.weekId}`}>
+      <Section title={`Weekly planning · ${PROJECTION_WEEKS.find((w) => w.id === filters.weekId)?.label ?? filters.weekId}`}>
         {planning ? (
           <ul className="stagelist">
             {PLANNING_STAGES.map((k) => {
@@ -275,7 +452,7 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
         </Section>
       )}
 
-      <Section title="Changes">
+      <Section title="Recent changes">
         {changes.length ? (
           <ul className="links">
             {changes.map((c) => (
@@ -296,35 +473,62 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
 
 // ---------------------------------------------------------------- site
 
-function SiteDetail({ siteId, filters, state, onPush }: { siteId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void }) {
+function SiteDetail({ siteId, filters, state, onPush, onViewCafes, selected, compact }: {
+  siteId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; onViewCafes: (siteId: string) => void;
+  /** Cafe currently open in the adjacent panel. */
+  selected?: string;
+  /** Parent-panel mode: keep the summary and cafe list, drop the long sections. */
+  compact?: boolean;
+}) {
   const site = siteById(siteId);
   const f: Filters = { ...filters, siteId, cafeId: 'all' };
   const hasData = hasDataFor(filters.date);
   const rows = hasData ? cafeRows(f, state.issues) : [];
   const coverage = workflowCoverage(rows, planningRows(f, state.issues), f);
   const live = rows.filter((r) => r.applicable);
+  const status = worstRowStatus(rows.map(rowStatus));
+  const top = rows.flatMap((r) => r.openIssues).sort(bySeverity)[0];
+  const changes = changesInScope(state.changes, f).slice(0, 5);
 
   return (
     <>
+      <StatusBlock
+        badge={hasData ? <StatusBadge status={ROW_STATUS[status].display} text={ROW_STATUS[status].label} /> : <StatusBadge status="unconfirmed" text="Data unavailable" />}
+        lines={hasData && <span className="meta">{live.filter((r) => r.ready).length} of {live.length} cafes in service prep ready{rows.length > live.length && ` · ${rows.length - live.length} not in service`}</span>}
+        next={top ? <><strong>Top blocker:</strong> {top.title} · {top.owner.name} · due {fmtDateTime(top.dueAt)}</> : hasData ? 'No open issues for this site in scope.' : undefined}
+      >
+        <div className="btn-row">
+          <button type="button" className="btn btn--sm" onClick={() => onViewCafes(siteId)}>
+            View cafes in table <ArrowRight size={14} aria-hidden="true" />
+          </button>
+        </div>
+      </StatusBlock>
       <dl className="kv">
         <div><dt>Region</dt><dd>{site.region}</dd></div>
         <div><dt>Kitchen</dt><dd>{site.arrangement} — {site.kitchen}</dd></div>
         <div><dt>Service date</dt><dd>{serviceDateLabel(filters.date)} · {filters.meal === 'All' ? 'all meals' : filters.meal}</dd></div>
-        <div><dt>Ready</dt><dd>{hasData ? `${live.filter((r) => r.ready).length} of ${live.length} cafes in service` : 'Data unavailable'}</dd></div>
         <div><dt>Final order cutoff</dt><dd>{deadlineFor('finalOrder', siteId)}</dd></div>
       </dl>
 
-      <Section title="Cafes">
+      <Section title={`Cafes (${rows.length}, ${live.length} in service)`}>
         {hasData ? (
           <ul className="stagelist">
             {rows.map((r) => {
               const s = rowStatus(r);
               const b = rowBlocker(r);
               return (
-                <li key={r.cafe.id}>
-                  <button type="button" className="link strong stagelist__k" onClick={() => onPush({ kind: 'cafe', id: r.cafe.id })}>{r.cafe.name}</button>
+                <li key={r.cafe.id} className={selected === r.cafe.id ? 'is-selected' : undefined}>
+                  <button
+                    type="button"
+                    className="link strong stagelist__k"
+                    data-target={`cafe:${r.cafe.id}`}
+                    aria-current={selected === r.cafe.id ? 'true' : undefined}
+                    onClick={() => onPush({ kind: 'cafe', id: r.cafe.id })}
+                  >
+                    {r.cafe.name}
+                  </button>
                   <StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} compact />
-                  <span className="meta" title={b.full}>{b.text}{b.more > 0 && ` +${b.more}`}</span>
+                  <span className="meta" title={`${b.full}${b.owner !== '—' ? ` · ${b.owner}` : ''}`}>{b.text}{b.more > 0 && ` +${b.more}`}{b.owner !== '—' && ` · ${b.owner}`}</span>
                 </li>
               );
             })}
@@ -334,12 +538,207 @@ function SiteDetail({ siteId, filters, state, onPush }: { siteId: string; filter
         )}
       </Section>
 
-      <Section title={`Daily stages · ${serviceDateLabel(filters.date)}`}>
+      {!compact && <>
+      <Section title={`Daily progress · ${serviceDateLabel(filters.date)}`}>
         {hasData ? <StageRows coverage={coverage} period="day" label="Daily stage progress" /> : <p className="meta">Data unavailable for this date in the demo.</p>}
       </Section>
-      <Section title={`Weekly stages · ${PROJECTION_WEEKS.find((w) => w.id === filters.weekId)?.label ?? filters.weekId}`}>
+      <Section title={`Weekly planning · ${PROJECTION_WEEKS.find((w) => w.id === filters.weekId)?.label ?? filters.weekId}`}>
         <StageRows coverage={coverage} period="week" label="Weekly stage progress" />
       </Section>
+
+      <Section title="Recent changes">
+        <ChangeLinks changes={changes} onPush={onPush} />
+      </Section>
+      </>}
+    </>
+  );
+}
+
+function ChangeLinks({ changes, onPush }: { changes: Change[]; onPush: (t: DrawerTarget) => void }) {
+  if (!changes.length) return <p className="muted">No recorded changes in scope.</p>;
+  return (
+    <ul className="links">
+      {changes.map((c) => (
+        <li key={c.id}>
+          <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'change', id: c.id })}>
+            {fmtDateTime(c.at)} · {cafeById(c.cafeId).name} · {c.dishId ? dishName(c.dishId) : c.record} {changeValue(c).prev} → {changeValue(c).next}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function IssueLinks({ issues, onPush, empty }: { issues: Issue[]; onPush: (t: DrawerTarget) => void; empty: string }) {
+  if (!issues.length) return <p className="muted">{empty}</p>;
+  return (
+    <ul className="links">
+      {issues.map((i) => (
+        <li key={i.id}>
+          <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'issue', id: i.id })}>
+            <SeverityBadge severity={i.severity} /> {i.short} · {i.owner.name} · due {fmtDateTime(i.dueAt)}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// ---------------------------------------------------------------- weekly planning (one cafe, one projection week)
+
+function PlanningDetail({ cafeId, filters, state, onPush }: { cafeId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void }) {
+  const cafe = cafeById(cafeId);
+  const pr = planningRows({ ...filters, siteId: cafe.siteId, cafeId }, state.issues)[0];
+  const status = worst(PLANNING_STAGES.map((k) => pr.stages[k].status));
+  const nextKey = PLANNING_STAGES.find((k) => pr.stages[k].status !== 'complete');
+  const issues = state.issues.filter((i) => i.cafeId === cafeId && i.scope.kind === 'week' && i.scope.weekId === filters.weekId && i.status !== 'resolved').sort(bySeverity);
+  const changes = state.changes.filter((c) => c.cafeId === cafeId && c.scope.kind === 'week' && c.scope.weekId === filters.weekId);
+
+  return (
+    <>
+      <StatusBlock
+        badge={<StatusBadge status={status} text={pr.record ? (status === 'complete' ? 'Weekly planning complete' : undefined) : 'Data unavailable'} />}
+        lines={pr.record && <span className="meta">Projection: {pr.record.projectedTotal ? fmtQty(pr.record.projectedTotal) : 'not submitted'}</span>}
+        next={nextKey && pr.record ? <><strong>Next:</strong> {STAGE_LABEL[nextKey]} — {pr.stages[nextKey].text} · owner role: {STAGE_OWNER_ROLE[nextKey]}{pr.stages[nextKey].rec?.dueAt && ` · due ${fmtDateTime(pr.stages[nextKey].rec!.dueAt!)}`}</> : undefined}
+      />
+
+      <Section title="Publication, selection and projection">
+        <ul className="stagelist">
+          {PLANNING_STAGES.map((k) => {
+            const st = pr.stages[k];
+            return (
+              <li key={k} title={[STAGE_EXPLAIN[k], st.rec?.note].filter(Boolean).join(' — ')}>
+                <span className="stagelist__k">{STAGE_LABEL[k]}</span>
+                <StatusBadge status={st.status} text={st.text} compact />
+                <span className="meta">
+                  {st.rec?.doneAt ? `Done ${fmtDateTime(st.rec.doneAt)}` : st.rec?.dueAt ? `Due ${fmtDateTime(st.rec.dueAt)}` : ''}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        {PLANNING_STAGES.some((k) => pr.stages[k].rec?.note) && (
+          <ul className="bullets small">
+            {PLANNING_STAGES.filter((k) => pr.stages[k].rec?.note).map((k) => <li key={k}><strong>{STAGE_SHORT_LABEL(k)}:</strong> {pr.stages[k].rec!.note}</li>)}
+          </ul>
+        )}
+      </Section>
+
+      <dl className="kv">
+        <div><dt>Menu publication rule</dt><dd>{deadlineFor('menuPublication', cafe.siteId)}</dd></div>
+        <div><dt>Projection cutoff</dt><dd>{deadlineFor('weeklyProjection', cafe.siteId)}</dd></div>
+        <div><dt>Projected total</dt><dd>{pr.record?.projectedTotal ? fmtQty(pr.record.projectedTotal) : 'Not submitted'}</dd></div>
+        <div><dt>Daily orders</dt><dd>Final orders (<Term k="MR" />) are separate and never overwrite this projection.</dd></div>
+      </dl>
+
+      <Section title="Related issues">
+        <IssueLinks issues={issues} onPush={onPush} empty="No open issues for this cafe in this projection week." />
+      </Section>
+      <Section title="Weekly changes">
+        <ChangeLinks changes={changes} onPush={onPush} />
+      </Section>
+      <div className="btn-row">
+        <button type="button" className="btn btn--sm" onClick={() => onPush({ kind: 'cafe', id: cafeId })}>
+          Daily progress for {serviceDateLabel(filters.date)} <ArrowRight size={14} aria-hidden="true" />
+        </button>
+      </div>
+    </>
+  );
+}
+
+const STAGE_SHORT_LABEL = (k: StageKey) => STAGE_LABEL[k];
+
+// ---------------------------------------------------------------- stage summary (coverage across cafes in scope)
+
+function StageDetail({ k, filters, state, onPush, onFilterStage }: {
+  k: StageKey; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; onFilterStage: (k: StageKey) => void;
+}) {
+  const weekly = (PLANNING_STAGES as StageKey[]).includes(k);
+  const hasData = hasDataFor(filters.date);
+  const rows = hasData ? cafeRows(filters, state.issues) : [];
+  const plan = planningRows(filters, state.issues);
+  const cov = workflowCoverage(rows, plan, filters).find((c) => c.key === k)!;
+  const breakdown = stageBreakdown(cov);
+  const affected = weekly
+    ? plan.filter((p) => p.stages[k as keyof typeof p.stages].status !== 'complete').map((p) => ({ cafe: p.cafe, site: p.site, cell: p.stages[k as keyof typeof p.stages] }))
+    : rows.filter((r) => r.applicable && r.stages[k as keyof typeof r.stages].status !== 'complete').map((r) => ({ cafe: r.cafe, site: r.site, cell: r.stages[k as keyof typeof r.stages] }));
+  const notInService = weekly ? 0 : rows.filter((r) => !r.applicable).length;
+  const ck = CUTOFF_KEY[k];
+  const sites = filters.siteId === 'all' ? SITES : [siteById(filters.siteId)];
+  const required = (REQUIRED_STAGES as StageKey[]).includes(k);
+
+  return (
+    <>
+      <StatusBlock
+        badge={cov.total ? <StatusBadge status={cov.status} /> : <StatusBadge status={!weekly && !hasData ? 'unconfirmed' : 'not_applicable'} text={!weekly && !hasData ? 'Data unavailable' : undefined} />}
+        lines={<span className="meta">{cov.total ? `${cov.complete} of ${cov.total} ${weekly ? 'cafes' : 'cafes in service'} complete` : 'No cafes in scope'}{breakdown && ` · ${breakdown}`}{notInService > 0 && ` · ${notInService} not in service (excluded)`}</span>}
+        next={<>{STAGE_EXPLAIN[k]} Owner role: {STAGE_OWNER_ROLE[k]}.{!weekly && !required && ' Tracked, but not required for preparation ready.'}</>}
+      >
+        {affected.length > 0 && (
+          <div className="btn-row">
+            <button type="button" className="btn btn--sm" onClick={() => onFilterStage(k)}>
+              Show {affected.length} incomplete {affected.length === 1 ? 'cafe' : 'cafes'} in {weekly ? 'planning' : 'overview'} table <ArrowRight size={14} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </StatusBlock>
+
+      <Section title="Deadline rules">
+        {ck ? (
+          <ul className="rules">
+            {sites.map((s) => (
+              <li key={s.id}>
+                <span className="rules__head">{s.name} <ProvenanceTag p={s.cutoffs[ck].provenance} /></span>
+                <span>{k === 'menuSelection' ? 'Before projection: ' : ''}{s.cutoffs[ck].rule}</span>
+                {s.cutoffs[ck].note && <span className="small muted">{s.cutoffs[ck].note}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="small">Per meal service time. No cutoff rule is recorded; actual dispatch is shown only when confirmed.</p>
+        )}
+      </Section>
+
+      <Section title={`Affected cafes (${affected.length})`}>
+        {affected.length ? (
+          <ul className="stagelist">
+            {affected.map(({ cafe, site, cell }) => (
+              <li key={cafe.id} title={'note' in cell && cell.note ? cell.note : undefined}>
+                <button type="button" className="link strong stagelist__k" onClick={() => onPush({ kind: weekly ? 'planning' : 'cafe', id: cafe.id })}>
+                  {cafe.name} <span className="meta">· {site.name}</span>
+                </button>
+                <StatusBadge status={cell.status} text={cell.text} compact />
+                <span className="meta">{'dueAt' in cell && cell.dueAt ? `Due ${fmtDateTime(cell.dueAt)}` : 'rec' in cell && cell.rec?.dueAt ? `Due ${fmtDateTime(cell.rec.dueAt)}` : ''}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">{cov.total ? 'Complete for every cafe in scope.' : 'Nothing to show for this scope.'}</p>
+        )}
+      </Section>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- cutoff rule across sites
+
+function CutoffDetail({ k }: { k: keyof Site['cutoffs'] }) {
+  const stages = (Object.keys(CUTOFF_KEY) as StageKey[]).filter((s) => CUTOFF_KEY[s] === k);
+  return (
+    <>
+      <StatusBlock
+        badge={<span className="tag">Applies to: {stages.map((s) => STAGE_LABEL[s]).join(', ')}</span>}
+        next="Existing = shown in the playbook walkthroughs. Needs verification = demo assumption. Proposed = suggested dashboard rule. None of these is enforced by this prototype."
+      />
+      <ul className="rules">
+        {SITES.map((s) => (
+          <li key={s.id}>
+            <span className="rules__head">{s.name} <ProvenanceTag p={s.cutoffs[k].provenance} /></span>
+            <span>{s.cutoffs[k].rule}</span>
+            <span className="small muted">{s.cutoffs[k].note ?? 'No verification note recorded.'}</span>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
@@ -361,8 +760,13 @@ function IssueDetail({ issue, state, dispatch, onPush, notify }: {
       <div className="badges">
         <SeverityBadge severity={issue.severity} />
         <IssueStatusBadge status={issue.status} />
-        {issue.acknowledged && <span className="tag">Acknowledged {fmtDateTime(issue.acknowledged.at)}</span>}
+        {issue.acknowledged && <span className="tag">Acknowledged {fmtDateTime(issue.acknowledged.at)} · still {issue.status === 'resolved' ? 'resolved' : 'open'}</span>}
       </div>
+      <StatusBlock
+        badge={<span className="strong">{done ? 'Closure note' : 'Next action'}</span>}
+        lines={!done && <span className="meta">{issue.owner.name} · due {fmtDateTime(issue.dueAt)} ({relativeToNow(issue.dueAt)})</span>}
+        next={done ? issue.closureNote : issue.nextAction}
+      />
       <dl className="kv">
         <div><dt>Scope</dt><dd>{scopeText(issue.scope, issue.siteId, issue.cafeId)}</dd></div>
         <div><dt>Stage</dt><dd>{STAGE_LABEL[issue.stage]}</dd></div>
@@ -386,7 +790,6 @@ function IssueDetail({ issue, state, dispatch, onPush, notify }: {
 
       <Section title="What happened"><p>{issue.whatHappened}</p></Section>
       <Section title="Impact"><p>{issue.impact}</p></Section>
-      <Section title={done ? 'Closure note' : 'Next action'}><p>{done ? issue.closureNote : issue.nextAction}</p></Section>
 
       {issue.ingredientImpact && (
         <Section title="Ingredient impact (recipe ratio)">

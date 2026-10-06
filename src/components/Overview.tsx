@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
-import { ArrowRight } from 'lucide-react';
-import type { Summary } from '../lib/derive';
+import { ArrowLeft, ArrowRight, Info } from 'lucide-react';
+import { cafeById, siteById } from '../lib/derive';
+import type { Filters, Summary } from '../lib/derive';
 
 export type CardKey = 'ready' | 'orders' | 'critical' | 'late';
 
@@ -11,11 +12,12 @@ export function SummaryCards({ s, active, onSelect }: { s: Summary; active: Card
     <div className="kpis" role="group" aria-label="Summary">
       <Card
         k="ready"
-        label="Cafes ready"
+        label="Preparation ready"
         value={s.ready}
         of={`of ${s.applicableCafes} in service`}
         sub={`${s.applicableCafes - s.ready} not ready`}
-        tip="Ready = menu published, selection, final order, production plan and ingredient request complete for every meal served. Closed cafes are excluded."
+        tip="Preparation ready = menu published, selection, final order, production plan and ingredient request complete for every meal served. It does not mean food was cooked, dispatched or delivered. Closed cafes are excluded."
+        info
         tone={s.ready === s.applicableCafes ? 'ok' : 'neutral'}
         active={active}
         onSelect={onSelect}
@@ -61,9 +63,9 @@ export function SummaryCards({ s, active, onSelect }: { s: Summary; active: Card
   );
 }
 
-function Card({ k, label, value, of, sub, tip, tone, active, onSelect, action }: {
+function Card({ k, label, value, of, sub, tip, tone, active, onSelect, action, info }: {
   k: CardKey; label: string; value: number; of: string; sub: ReactNode; tip: string; tone: 'ok' | 'review' | 'critical' | 'neutral';
-  active: CardKey | null; onSelect: (k: CardKey) => void; action: string;
+  active: CardKey | null; onSelect: (k: CardKey) => void; action: string; info?: boolean;
 }) {
   const on = active === k;
   return (
@@ -74,8 +76,9 @@ function Card({ k, label, value, of, sub, tip, tone, active, onSelect, action }:
       onClick={() => onSelect(k)}
       title={tip}
       aria-label={`${label}: ${value} ${of}. ${action}.`}
+      aria-description={info ? tip : undefined}
     >
-      <span className="kpi__label">{label}</span>
+      <span className="kpi__label">{label}{info && <Info size={12} aria-hidden="true" className="kpi__info" />}</span>
       <span className="kpi__row">
         <span className="kpi__value">{value}</span>
         <span className="kpi__of">{of}</span>
@@ -83,5 +86,33 @@ function Card({ k, label, value, of, sub, tip, tone, active, onSelect, action }:
       </span>
       <span className="kpi__sub">{sub}</span>
     </button>
+  );
+}
+
+/** Breadcrumb shown when the overview is scoped to one site (or one cafe). Location only — status filters live in the table. */
+export function ScopeBar({ filters, onAllSites, onSite }: { filters: Filters; onAllSites: () => void; onSite: (siteId: string) => void }) {
+  const site = siteById(filters.siteId);
+  const cafe = filters.cafeId !== 'all' ? cafeById(filters.cafeId) : undefined;
+  return (
+    <div className="scopebar">
+      <nav aria-label="Overview location">
+        <ol className="crumbs">
+          <li>
+            <button type="button" className="crumbs__link" onClick={onAllSites}>
+              <ArrowLeft size={14} aria-hidden="true" /> All sites
+            </button>
+          </li>
+          <li>
+            {cafe ? (
+              <button type="button" className="crumbs__link" onClick={() => onSite(site.id)}>{site.name}</button>
+            ) : (
+              <span aria-current="page">{site.name}</span>
+            )}
+          </li>
+          {cafe && <li><span aria-current="page">{cafe.name}</span></li>}
+        </ol>
+      </nav>
+      <span className="meta">Cards, cafes, issues and changes below are for {cafe ? cafe.name : site.name} only.</span>
+    </div>
   );
 }

@@ -1,15 +1,16 @@
-import { useMemo, useState } from 'react';
-import { ChevronRight, Download, Search, X } from 'lucide-react';
+import { useMemo } from 'react';
+import { ArrowRight, Download, Search, X } from 'lucide-react';
 import { fmtDateTime, isPast, relativeToNow, serviceDateLabel } from '../data/clock';
 import { SITES } from '../data/masters';
-import { REQUIRED_STAGES, ROW_STATUS, rowBlocker, rowStatus, STAGE_LABEL, STAGE_SHORT, worstRowStatus, bySeverity } from '../lib/derive';
+import { REQUIRED_STAGES, ROW_STATUS, rowBlocker, rowStatus, siteById, STAGE_LABEL, STAGE_SHORT, worstRowStatus, bySeverity } from '../lib/derive';
 import type { CafeRow, DailyStage, Filters, RowStatus } from '../lib/derive';
-import { EmptyState, InfoTip, StatusBadge } from './ui';
+import { EmptyState, InfoTip, rowOpen, StatusBadge, ViewButton } from './ui';
+import type { OpenFn } from './ui';
 
 export type QuickFilter = 'all' | 'attention' | 'overdue' | 'unconfirmed' | 'not_ready' | 'order_pending' | 'ingredient_review';
 
 export const QUICK_LABEL: Record<QuickFilter, string> = {
-  all: 'All',
+  all: 'All statuses',
   attention: 'Needs attention',
   overdue: 'Overdue',
   unconfirmed: 'Not confirmed',
@@ -56,31 +57,50 @@ interface Props {
   onQuick: (q: QuickFilter) => void;
   stage: DailyStage | null;
   onClearStage: () => void;
-  onOpenCafe: (cafeId: string) => void;
-  onOpenSite: (siteId: string) => void;
-  onPickSite: (siteId: string) => void;
+  onOpenCafe: OpenFn;
+  onOpenSite: OpenFn;
+  /** Intentional drill-down: scope the page to one site. */
+  onViewCafes: (siteId: string) => void;
+  search: string;
+  onSearch: (q: string) => void;
   onExport: (visible: CafeRow[], search: string) => void;
 }
 
-export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage, onOpenCafe, onOpenSite, onPickSite, onExport }: Props) {
-  const [search, setSearch] = useState('');
+export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage, onOpenCafe, onOpenSite, onViewCafes, search, onSearch: setSearch, onExport }: Props) {
   const visible = useMemo(() => [...filterRows(rows, quick, search, stage)].sort(byStatus), [rows, quick, search, stage]);
   const narrowing = quick !== 'all' || !!search.trim() || !!stage;
   // "All sites" shows one summary per site; any narrowing shows the matching cafes so drill-downs land on records.
   const siteMode = filters.siteId === 'all' && filters.cafeId === 'all' && !narrowing;
+  const live = rows.filter((r) => r.applicable).length;
+  const title = siteMode
+    ? 'Sites overview'
+    : filters.siteId === 'all'
+      ? 'Cafes at all sites'
+      : filters.cafeId === 'all'
+        ? `Cafes at ${siteById(filters.siteId).name}`
+        : `${rows[0]?.cafe.name ?? 'Cafe'} at ${siteById(filters.siteId).name}`;
+  const clearAll = () => { onQuick('all'); setSearch(''); onClearStage(); };
 
   return (
     <section className="panel" id="status-table" aria-labelledby="table-title">
       <div className="panel__head">
-        <h2 id="table-title">{siteMode ? 'Sites' : 'Cafes'}</h2>
-        <span className="meta">{serviceDateLabel(filters.date)} · {filters.meal === 'All' ? 'all meals' : filters.meal}</span>
+        <h2 id="table-title" tabIndex={-1}>{title}</h2>
+        <span className="meta">
+          {filters.siteId !== 'all' && `${rows.length} ${rows.length === 1 ? 'cafe' : 'cafes'} (${live} in service) · `}
+          {serviceDateLabel(filters.date)} · {filters.meal === 'All' ? 'all meals' : filters.meal}
+        </span>
         <div className="panel__tools">
-          <label className="ctl ctl--sm">
-            <span className="sr-only">Show</span>
-            <select value={quick} onChange={(e) => onQuick(e.target.value as QuickFilter)} aria-label="Show cafes">
+          {narrowing && (
+            <button type="button" className="btn btn--link btn--sm" onClick={clearAll}>
+              Clear filters
+            </button>
+          )}
+          <label className="ctl ctl--sm ctl--status">
+            <span className="ctl__tag" aria-hidden="true">Status</span>
+            <select value={quick} onChange={(e) => onQuick(e.target.value as QuickFilter)} aria-label="Status filter">
               {(Object.keys(QUICK_LABEL) as QuickFilter[]).map((k) => (
                 <option key={k} value={k}>
-                  {k === 'all' ? 'All cafes' : `${QUICK_LABEL[k]} (${filterRows(rows, k, '', null).length})`}
+                  {k === 'all' ? QUICK_LABEL.all : `${QUICK_LABEL[k]} (${filterRows(rows, k, '', null).length})`}
                 </option>
               ))}
             </select>
@@ -106,8 +126,8 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
 
       {!visible.length ? (
         <EmptyState title="No cafes match these filters">
-          <button type="button" className="btn btn--link" onClick={() => { onQuick('all'); setSearch(''); onClearStage(); }}>
-            Clear table filters
+          <button type="button" className="btn btn--link" onClick={clearAll}>
+            Clear filters
           </button>
         </EmptyState>
       ) : (
@@ -126,9 +146,10 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
               <th scope="col">
                 <span className="th-info">
                   Status
-                  <InfoTip label="Readiness definition">
-                    Ready = {REQUIRED_STAGES.map((k) => STAGE_SHORT[k].toLowerCase()).join(', ')} complete for every meal the cafe serves.
-                    Store handoff and dispatch are tracked but not required (data partly unavailable).
+                  <InfoTip label="Preparation ready definition">
+                    Prep ready = {REQUIRED_STAGES.map((k) => STAGE_SHORT[k].toLowerCase()).join(', ')} complete for every meal the cafe serves.
+                    It does not mean food is cooked, dispatched or delivered: store handoff and dispatch are tracked separately (data partly unavailable).
+                    Closed cafes show Not applicable and are excluded.
                   </InfoTip>
                 </span>
               </th>
@@ -143,7 +164,7 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
               ? SITES.map((site) => {
                   const siteRows = visible.filter((r) => r.site.id === site.id);
                   if (!siteRows.length) return null;
-                  return <SiteTr key={site.id} siteId={site.id} name={site.name} rows={siteRows} onPick={onPickSite} onOpen={onOpenSite} />;
+                  return <SiteTr key={site.id} siteId={site.id} name={site.name} rows={siteRows} onOpen={onOpenSite} onViewCafes={onViewCafes} />;
                 })
               : visible.map((r) => <CafeTr key={r.cafe.id} r={r} showSite={filters.siteId === 'all'} onOpen={onOpenCafe} />)}
           </tbody>
@@ -151,8 +172,8 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
       )}
       <p className="panel__foot meta">
         {siteMode
-          ? `${SITES.filter((s) => visible.some((r) => r.site.id === s.id)).length} sites · ${rows.length} cafes. Pick a site to see its cafes.`
-          : `Showing ${visible.length} of ${rows.length} cafes.`}
+          ? `${SITES.filter((s) => visible.some((r) => r.site.id === s.id)).length} sites · ${rows.length} cafes (${live} in service). Click a site for its summary, or “View cafes” to list them.`
+          : `Showing ${visible.length} of ${rows.length} cafes (${live} in service).`}
       </p>
     </section>
   );
@@ -179,17 +200,18 @@ function Blocker({ text, full, more }: { text: string; full: string; more: numbe
   );
 }
 
-function RowBadge({ s, sub }: { s: RowStatus; sub?: string }) {
+function RowBadge({ s, sub, subTitle }: { s: RowStatus; sub?: string; subTitle?: string }) {
   return (
     <span className="rowstatus">
       <StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} compact />
-      {sub && <span className="meta">{sub}</span>}
+      {sub && <span className="meta" title={subTitle}>{sub}</span>}
     </span>
   );
 }
 
-function SiteTr({ siteId, name, rows, onPick, onOpen }: { siteId: string; name: string; rows: CafeRow[]; onPick: (id: string) => void; onOpen: (id: string) => void }) {
+function SiteTr({ siteId, name, rows, onOpen, onViewCafes }: { siteId: string; name: string; rows: CafeRow[]; onOpen: OpenFn; onViewCafes: (siteId: string) => void }) {
   const live = rows.filter((r) => r.applicable);
+  const closed = rows.length - live.length;
   const ready = live.filter((r) => r.ready).length;
   const status = worstRowStatus(rows.map(rowStatus));
   const issues = rows.flatMap((r) => r.openIssues).sort(bySeverity);
@@ -201,42 +223,39 @@ function SiteTr({ siteId, name, rows, onPick, onOpen }: { siteId: string; name: 
       ? rowBlocker(fallback)
       : { text: 'None', full: 'No open blocker', owner: '—', dueAt: undefined, more: 0 };
   return (
-    <tr className="is-clickable" tabIndex={0} aria-label={`View ${name} details`} onClick={() => onOpen(siteId)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(siteId); } }}>
+    <tr {...rowOpen((from) => onOpen(siteId, from))}>
       <th scope="row">
-        <button type="button" className="link strong" onClick={(e) => { e.stopPropagation(); onPick(siteId); }} title={`Filter to ${name}`}>{name}</button>
-        <span className="meta"> · {rows.length} cafes</span>
+        <span className="strong">{name}</span>
+        <span className="meta" title={closed ? `${rows.length} cafes, ${closed} not in service on this date` : undefined}>
+          {' '}· {rows.length} cafes{closed ? ` · ${closed} closed` : ''}
+        </span>
+        <button type="button" className="btn btn--link btn--sm sitecafes" onClick={() => onViewCafes(siteId)} aria-label={`View cafes at ${name}`}>
+          View cafes <ArrowRight size={12} aria-hidden="true" />
+        </button>
       </th>
-      <td><RowBadge s={status} sub={live.length ? `${ready}/${live.length} ready` : undefined} /></td>
+      <td><RowBadge s={status} sub={live.length ? `${ready} of ${live.length} prep ready` : undefined} subTitle={`${ready} of ${live.length} cafes in service are preparation ready`} /></td>
       <td><Blocker text={b.text} full={b.full} more={b.more} /></td>
       <td className="truncate" title={b.owner}>{b.owner}</td>
       <td><Due at={b.dueAt} /></td>
-      <td>
-        <button type="button" className="icon-btn icon-btn--sm" onClick={(e) => { e.stopPropagation(); onOpen(siteId); }} aria-label={`View ${name} details`}>
-          <ChevronRight size={16} aria-hidden="true" />
-        </button>
-      </td>
+      <td><ViewButton label={`View ${name} details`} onOpen={(from) => onOpen(siteId, from)} /></td>
     </tr>
   );
 }
 
-function CafeTr({ r, showSite, onOpen }: { r: CafeRow; showSite: boolean; onOpen: (id: string) => void }) {
+function CafeTr({ r, showSite, onOpen }: { r: CafeRow; showSite: boolean; onOpen: OpenFn }) {
   const b = rowBlocker(r);
   const s = rowStatus(r);
   return (
-    <tr className={`is-clickable ${r.applicable ? '' : 'is-na'}`} tabIndex={0} aria-label={`View ${r.cafe.name} details`} onClick={() => onOpen(r.cafe.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(r.cafe.id); } }}>
+    <tr {...rowOpen((from) => onOpen(r.cafe.id, from), r.applicable ? '' : 'is-na')}>
       <th scope="row">
-        <button type="button" className="link strong" onClick={(e) => { e.stopPropagation(); onOpen(r.cafe.id); }}>{r.cafe.name}</button>
+        <span className="strong">{r.cafe.name}</span>
         {showSite && <span className="meta"> · {r.site.name}</span>}
       </th>
       <td><RowBadge s={s} /></td>
       <td><Blocker text={b.text} full={b.full} more={b.more} /></td>
       <td className="truncate" title={b.owner}>{b.owner}</td>
       <td><Due at={b.dueAt} /></td>
-      <td>
-        <button type="button" className="icon-btn icon-btn--sm" onClick={(e) => { e.stopPropagation(); onOpen(r.cafe.id); }} aria-label={`View ${r.cafe.name} details`}>
-          <ChevronRight size={16} aria-hidden="true" />
-        </button>
-      </td>
+      <td><ViewButton label={`View ${r.cafe.name} details`} onOpen={(from) => onOpen(r.cafe.id, from)} /></td>
     </tr>
   );
 }

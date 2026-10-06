@@ -348,7 +348,7 @@ export interface StageCoverage {
   deadline: string;
 }
 
-const CUTOFF_KEY: Record<StageKey, keyof Site['cutoffs'] | null> = {
+export const CUTOFF_KEY: Record<StageKey, keyof Site['cutoffs'] | null> = {
   menuPublication: 'menuPublication',
   menuSelection: 'projection',
   weeklyProjection: 'projection',
@@ -409,7 +409,7 @@ export function fmtQty(q?: { value: number; unit: string }): string {
 export type RowStatus = 'ready' | 'pending' | 'overdue' | 'review' | 'unconfirmed' | 'not_applicable';
 
 export const ROW_STATUS: Record<RowStatus, { label: string; display: DisplayStatus }> = {
-  ready: { label: 'Ready', display: 'complete' },
+  ready: { label: 'Prep ready', display: 'complete' },
   pending: { label: 'Pending', display: 'pending' },
   overdue: { label: 'Overdue', display: 'overdue' },
   review: { label: 'Needs review', display: 'review' },
@@ -419,7 +419,7 @@ export const ROW_STATUS: Record<RowStatus, { label: string; display: DisplayStat
 
 const ROW_RANK: RowStatus[] = ['overdue', 'review', 'unconfirmed', 'pending', 'ready', 'not_applicable'];
 
-/** One status per cafe. "Ready" follows the readiness definition so it always matches the card. */
+/** One status per cafe. "Prep ready" follows the readiness definition so it always matches the card. */
 export function rowStatus(r: CafeRow): RowStatus {
   if (!r.applicable) return 'not_applicable';
   if (r.ready) return 'ready';

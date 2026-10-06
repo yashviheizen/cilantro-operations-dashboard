@@ -17,7 +17,7 @@ export const VIEWS: { key: View; label: string; icon: typeof Leaf }[] = [
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
   { key: 'exceptions', label: 'Exceptions', icon: TriangleAlert },
   { key: 'changes', label: 'Change log', icon: History },
-  { key: 'planning', label: 'Weekly planning', icon: CalendarRange },
+  { key: 'planning', label: 'Planning & progress', icon: CalendarRange },
   { key: 'data', label: 'Data status', icon: Database },
 ];
 

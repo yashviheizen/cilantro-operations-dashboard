@@ -6,7 +6,8 @@ import {
 } from '../lib/derive';
 import type { Filters, PlanningRow, PlanningStage, StageCoverage } from '../lib/derive';
 import type { Change, DemoSettings, Issue, IssueScope, IssueStatus, Severity, StageKey } from '../data/types';
-import { EmptyState, IssueStatusBadge, SeverityDot, StatusBadge, Term } from './ui';
+import { EmptyState, IssueStatusBadge, rowOpen, SeverityDot, StatusBadge, Term, ViewButton } from './ui';
+import type { OpenFn } from './ui';
 
 export function scopeText(scope: IssueScope, siteId: string, cafeId?: string): string {
   const place = cafeId ? `${siteById(siteId).name} · ${cafeById(cafeId).name}` : siteById(siteId).name;
@@ -37,7 +38,7 @@ export function filterIssues(issues: Issue[], f: IssueFilter): Issue[] {
 }
 
 /** Compact issue rows: severity, short title, place, owner, due, status. Full detail opens in the drawer. */
-export function IssueRows({ issues, onOpen, label }: { issues: Issue[]; onOpen: (id: string) => void; label: string }) {
+export function IssueRows({ issues, onOpen, label }: { issues: Issue[]; onOpen: OpenFn; label: string }) {
   return (
     <div className="irows">
       <div className="irow irow--head" aria-hidden="true">
@@ -53,8 +54,9 @@ export function IssueRows({ issues, onOpen, label }: { issues: Issue[]; onOpen: 
               <button
                 type="button"
                 className={`irow${i.status === 'resolved' ? ' is-resolved' : ''}`}
-                onClick={() => onOpen(i.id)}
-                aria-label={`${i.severity} severity: ${i.title}. ${place}. Owner ${i.owner.name}. Due ${fmtDateTime(i.dueAt)}${late ? ', overdue' : ''}. ${i.status.replace('_', ' ')}${i.acknowledged ? ', acknowledged' : ''}.`}
+                onClick={(e) => onOpen(i.id, e.currentTarget)}
+                title="View issue details"
+                aria-label={`View details: ${i.severity} severity: ${i.title}. ${place}. Owner ${i.owner.name}. Due ${fmtDateTime(i.dueAt)}${late ? ', overdue' : ''}. ${i.status.replace('_', ' ')}${i.acknowledged ? ', acknowledged' : ''}.`}
               >
                 <SeverityDot severity={i.severity} />
                 <span className="irow__title" title={i.title}>
@@ -172,7 +174,7 @@ export function ChangeFilterBar({ filter, onFilter, changes, settings }: { filte
 }
 
 /** Change log: Time · Site / cafe · Change · Old → new · Changed by · Acknowledgment. */
-export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[]; settings: DemoSettings; onOpen: (id: string) => void }) {
+export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[]; settings: DemoSettings; onOpen: OpenFn }) {
   return (
     <table className="grid grid--changes">
       <colgroup>
@@ -182,6 +184,7 @@ export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[
         <col className="c-delta" />
         <col className="c-by" />
         <col className="c-ack" />
+        <col className="c-view" />
       </colgroup>
       <thead>
         <tr>
@@ -191,6 +194,7 @@ export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[
           <th scope="col">Old → new</th>
           <th scope="col">Changed by</th>
           <th scope="col">Acknowledgment</th>
+          <th scope="col"><span className="sr-only">View</span></th>
         </tr>
       </thead>
       <tbody>
@@ -199,15 +203,15 @@ export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[
           const ack = ackSummary(c);
           const unusual = isUnusualChange(c, settings);
           return (
-            <tr key={c.id} className="is-clickable" tabIndex={0} aria-label={`View ${changeWhat(c)} change`} onClick={() => onOpen(c.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(c.id); } }}>
+            <tr key={c.id} {...rowOpen((from) => onOpen(c.id, from))}>
               <td className="meta-ink">{fmtDateTime(c.at)}</td>
               <td className="truncate" title={`${cafeById(c.cafeId).name} · ${siteById(c.siteId).name}`}>
                 {cafeById(c.cafeId).name}<span className="meta"> · {siteById(c.siteId).name}</span>
               </td>
               <td>
-                <button type="button" className="link change__what" onClick={(e) => { e.stopPropagation(); onOpen(c.id); }} title={`${c.kind}: ${changeWhat(c)}`}>
+                <span className="change__what strong" title={`${c.kind}: ${changeWhat(c)}`}>
                   <span className="truncate">{changeWhat(c)}</span>
-                </button>
+                </span>
                 <span className="change__meta">
                   <span className="meta">{changeWhen(c)}</span>
                   {c.late && <span className="flag flag--review">Late</span>}
@@ -222,6 +226,7 @@ export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[
               <td className="truncate" title={ack.text}>
                 <StatusBadge status={ack.done ? 'complete' : 'review'} text={ack.done ? (c.acknowledgments.length ? 'Acknowledged' : 'Not required') : ack.text} compact />
               </td>
+              <td><ViewButton label={`View ${changeWhat(c)} change, ${cafeById(c.cafeId).name}`} onOpen={(from) => onOpen(c.id, from)} /></td>
             </tr>
           );
         })}
@@ -231,7 +236,7 @@ export function ChangeLogTable({ changes, settings, onOpen }: { changes: Change[
 }
 
 /** Small newest-first preview for the overview. */
-export function ChangesPreview({ changes, onOpen }: { changes: Change[]; onOpen: (id: string) => void }) {
+export function ChangesPreview({ changes, onOpen }: { changes: Change[]; onOpen: OpenFn }) {
   return (
     <ul className="cprev">
       {changes.map((c) => {
@@ -241,8 +246,9 @@ export function ChangesPreview({ changes, onOpen }: { changes: Change[]; onOpen:
             <button
               type="button"
               className="cprev__row"
-              onClick={() => onOpen(c.id)}
-              aria-label={`${changeWhat(c)}, ${cafeById(c.cafeId).name}: ${v.prev} to ${v.next}${c.late ? ', late' : ''}`}
+              onClick={(e) => onOpen(c.id, e.currentTarget)}
+              title="View change details"
+              aria-label={`View details: ${changeWhat(c)}, ${cafeById(c.cafeId).name}: ${v.prev} to ${v.next}${c.late ? ', late' : ''}`}
             >
               <span className="meta">{fmtDateTime(c.at).split(' ').slice(-1)[0]}</span>
               <span className="truncate">{changeWhat(c)} <span className="meta">· {cafeById(c.cafeId).name}</span></span>
@@ -258,8 +264,8 @@ export function ChangesPreview({ changes, onOpen }: { changes: Change[]; onOpen:
 
 // ---------------------------------------------------------------- stage summaries (weekly and daily kept apart)
 
-export function StageRows({ coverage, period, active, onSelect, label }: {
-  coverage: StageCoverage[]; period: 'week' | 'day'; active?: StageKey | null; onSelect?: (k: StageKey) => void; label: string;
+export function StageRows({ coverage, period, active, onOpen, label }: {
+  coverage: StageCoverage[]; period: 'week' | 'day'; active?: StageKey | null; onOpen?: (k: StageKey, from?: HTMLElement | null) => void; label: string;
 }) {
   const rows = coverage.filter((c) => c.period === period);
   return (
@@ -269,6 +275,7 @@ export function StageRows({ coverage, period, active, onSelect, label }: {
         <col className="c-count" />
         <col className="c-status" />
         <col />
+        {onOpen && <col className="c-view" />}
       </colgroup>
       <thead>
         <tr>
@@ -276,22 +283,19 @@ export function StageRows({ coverage, period, active, onSelect, label }: {
           <th scope="col">Complete</th>
           <th scope="col">Status</th>
           <th scope="col">Deadline rule</th>
+          {onOpen && <th scope="col"><span className="sr-only">View</span></th>}
         </tr>
       </thead>
       <tbody>
         {rows.map((c) => {
-          const breakdown = Object.entries(c.counts)
-            .filter(([s]) => s !== 'complete')
-            .map(([s, n]) => `${n} ${STATUS_LABEL[s as keyof typeof STATUS_LABEL].toLowerCase()}`)
-            .join(', ');
+          const breakdown = stageBreakdown(c);
+          const hl = active === c.key ? 'is-hl' : '';
+          const props = onOpen ? rowOpen((from) => onOpen(c.key, from), hl) : { className: hl };
           return (
-            <tr key={c.key} className={active === c.key ? 'is-hl' : ''}>
+            <tr key={c.key} {...props}>
               <th scope="row" title={STAGE_EXPLAIN[c.key]}>
-                {onSelect && c.total > c.complete ? (
-                  <button type="button" className="link" onClick={() => onSelect(c.key)} aria-pressed={active === c.key}>{STAGE_LABEL[c.key]}</button>
-                ) : (
-                  STAGE_LABEL[c.key]
-                )}
+                {STAGE_LABEL[c.key]}
+                {active === c.key && <span className="sr-only"> (filter applied)</span>}
               </th>
               <td className="num">{c.total ? `${c.complete}/${c.total}` : '—'}</td>
               <td>
@@ -299,6 +303,7 @@ export function StageRows({ coverage, period, active, onSelect, label }: {
                 {breakdown && <span className="sr-only"> ({breakdown})</span>}
               </td>
               <td className="truncate meta-ink" title={breakdown ? `${c.deadline} · ${breakdown}` : c.deadline}>{c.deadline}</td>
+              {onOpen && <td><ViewButton label={`View ${STAGE_LABEL[c.key]} stage details`} onOpen={(from) => onOpen(c.key, from)} /></td>}
             </tr>
           );
         })}
@@ -307,10 +312,17 @@ export function StageRows({ coverage, period, active, onSelect, label }: {
   );
 }
 
+export function stageBreakdown(c: StageCoverage): string {
+  return Object.entries(c.counts)
+    .filter(([s]) => s !== 'complete')
+    .map(([s, n]) => `${n} ${STATUS_LABEL[s as keyof typeof STATUS_LABEL].toLowerCase()}`)
+    .join(', ');
+}
+
 // ---------------------------------------------------------------- weekly planning table
 
 export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue, onOpenCafe, issues }: {
-  rows: PlanningRow[]; filters: Filters; stage: PlanningStage | null; onClearStage: () => void; onOpenIssue: (id: string) => void; onOpenCafe: (id: string) => void; issues: Issue[];
+  rows: PlanningRow[]; filters: Filters; stage: PlanningStage | null; onClearStage: () => void; onOpenIssue: OpenFn; onOpenCafe: OpenFn; issues: Issue[];
 }) {
   const week = PROJECTION_WEEKS.find((w) => w.id === filters.weekId)!;
   const shown = stage ? rows.filter((r) => r.stages[stage].status !== 'complete') : rows;
@@ -332,6 +344,7 @@ export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue,
             {PLANNING_STAGES.map((k) => <col key={k} />)}
             <col className="c-qty" />
             <col />
+            <col className="c-view" />
           </colgroup>
           <thead>
             <tr>
@@ -341,13 +354,14 @@ export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue,
               ))}
               <th scope="col">Projected</th>
               <th scope="col">Issue</th>
+              <th scope="col"><span className="sr-only">View</span></th>
             </tr>
           </thead>
           <tbody>
             {shown.map((r) => {
               const issue = issues.find((i) => i.cafeId === r.cafe.id && i.scope.kind === 'week' && i.scope.weekId === filters.weekId && i.status !== 'resolved');
               return (
-                <tr key={r.cafe.id} className="is-clickable" tabIndex={0} aria-label={`View ${r.cafe.name} planning details`} onClick={() => onOpenCafe(r.cafe.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenCafe(r.cafe.id); } }}>
+                <tr key={r.cafe.id} {...rowOpen((from) => onOpenCafe(r.cafe.id, from))}>
                   <th scope="row" className="truncate" title={`${r.cafe.name} · ${r.site.name}`}>
                     {r.cafe.name}<span className="meta"> · {r.site.name}</span>
                   </th>
@@ -359,13 +373,14 @@ export function PlanningTable({ rows, filters, stage, onClearStage, onOpenIssue,
                   <td>{r.record?.projectedTotal ? fmtQty(r.record.projectedTotal) : <span className="muted">Not submitted</span>}</td>
                   <td className="truncate">
                     {issue ? (
-                      <button type="button" className="link" onClick={(e) => { e.stopPropagation(); onOpenIssue(issue.id); }} title={issue.title}>
+                      <button type="button" className="link" onClick={(e) => onOpenIssue(issue.id, e.currentTarget)} title={`Open issue: ${issue.title}`}>
                         {issue.short}
                       </button>
                     ) : (
                       <span className="muted">—</span>
                     )}
                   </td>
+                  <td><ViewButton label={`View ${r.cafe.name} planning details`} onOpen={(from) => onOpenCafe(r.cafe.id, from)} /></td>
                 </tr>
               );
             })}

@@ -4,7 +4,7 @@ import { TOMORROW, serviceDateLabel } from './data/clock';
 import { CAFES, PROJECTION_WEEKS } from './data/masters';
 import { SettingsMenu, Sidebar, TopBar, VIEWS } from './components/Shell';
 import type { View } from './components/Shell';
-import { SummaryCards } from './components/Overview';
+import { ScopeBar, SummaryCards } from './components/Overview';
 import type { CardKey } from './components/Overview';
 import { StatusTable, QUICK_LABEL, filterRows } from './components/StatusTable';
 import type { QuickFilter } from './components/StatusTable';
@@ -45,6 +45,7 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [filters, setFilters] = useState<Filters>({ siteId: 'all', cafeId: 'all', date: TOMORROW, meal: 'All', weekId: '2026-W43' });
   const [quick, setQuick] = useState<QuickFilter>('all');
+  const [search, setSearch] = useState('');
   const [dailyStage, setDailyStage] = useState<DailyStage | null>(null);
   const [planStage, setPlanStage] = useState<PlanningStage | null>(null);
   const [issueFilter, setIssueFilter] = useState<IssueFilter>(DEFAULT_ISSUE_FILTER);
@@ -103,14 +104,43 @@ export default function App() {
 
   const changeFilters = (f: Partial<Filters>) => setFilters((prev) => ({ ...prev, ...f }));
 
-  const openDrawer = (t: DrawerTarget) => {
-    if (!drawer.length) opener.current = document.activeElement as HTMLElement;
+  // Row clicks and their view buttons both land here; one drawer at a time, focus returns to the row's view button.
+  const openDrawer = (t: DrawerTarget, from?: HTMLElement | null) => {
+    const top = drawer[drawer.length - 1];
+    if (top && top.kind === t.kind && top.id === t.id && drawer.length === 1) return;
+    opener.current = from ?? (document.activeElement as HTMLElement);
     setDrawer([t]);
   };
   const closeDrawer = useCallback(() => {
     setDrawer([]);
-    requestAnimationFrame(() => opener.current?.focus());
+    requestAnimationFrame(() => opener.current?.focus({ preventScroll: true }));
   }, []);
+  /** Close after a drawer action that moves the user elsewhere — no focus return to the old row. */
+  const leaveDrawer = () => { opener.current = null; setDrawer([]); };
+  /** Explicit drill-down from a site row or site drawer: scope the page to that site's cafes. */
+  const viewCafes = (siteId: string) => {
+    changeFilters({ siteId, cafeId: 'all' });
+    setQuick('all');
+    setSearch('');
+    setDailyStage(null);
+  };
+  /** Breadcrumb "All sites": back to the site summary table, keeping date and meal. */
+  const allSites = () => {
+    changeFilters({ siteId: 'all', cafeId: 'all' });
+    setQuick('all');
+    setSearch('');
+    setDailyStage(null);
+    requestAnimationFrame(() => document.getElementById('table-title')?.focus({ preventScroll: true }));
+  };
+  /** Site → cafe opens beside the site panel; deeper details replace the right panel instead of chaining. */
+  const pushDrawer = (t: DrawerTarget) =>
+    setDrawer((d) => {
+      if (d[0]?.kind === 'site' && t.kind === 'cafe') {
+        const cafe = CAFES.find((c) => c.id === t.id)!;
+        return [d[0].id === cafe.siteId ? d[0] : { kind: 'site', id: cafe.siteId }, t];
+      }
+      return d.length >= 3 ? [...d.slice(0, 2), t] : [...d, t];
+    });
   const closeMobileNav = useCallback(() => setMobileNav(false), []);
 
   const activeCard: CardKey | null = quick === 'not_ready' ? 'ready' : quick === 'order_pending' ? 'orders' : null;
@@ -179,6 +209,9 @@ export default function App() {
           {view === 'overview' && (
             hasData ? (
               <>
+                {filters.siteId !== 'all' && (
+                  <ScopeBar filters={filters} onAllSites={allSites} onSite={(siteId) => changeFilters({ siteId, cafeId: 'all' })} />
+                )}
                 <SummaryCards s={summary} active={activeCard} onSelect={onCard} />
                 <StatusTable
                   rows={rows}
@@ -187,9 +220,11 @@ export default function App() {
                   onQuick={setQuick}
                   stage={dailyStage}
                   onClearStage={() => setDailyStage(null)}
-                  onOpenCafe={(id) => openDrawer({ kind: 'cafe', id })}
-                  onOpenSite={(id) => openDrawer({ kind: 'site', id })}
-                  onPickSite={(id) => changeFilters({ siteId: id, cafeId: 'all' })}
+                  onOpenCafe={(id, from) => openDrawer({ kind: 'cafe', id }, from)}
+                  onOpenSite={(id, from) => openDrawer({ kind: 'site', id }, from)}
+                  onViewCafes={viewCafes}
+                  search={search}
+                  onSearch={setSearch}
                   onExport={(visible, search) => {
                     const name = downloadCsv(rowsToCsv(visible, filters, QUICK_LABEL[quick], search), filters);
                     notify(`Exported ${visible.length} ${visible.length === 1 ? 'row' : 'rows'} to ${name}.`);
@@ -207,7 +242,7 @@ export default function App() {
                       </div>
                     </div>
                     {openIssues.length ? (
-                      <IssueRows issues={filterIssues(openIssues, DEFAULT_ISSUE_FILTER).slice(0, 5)} onOpen={(id) => openDrawer({ kind: 'issue', id })} label="Top priority issues" />
+                      <IssueRows issues={filterIssues(openIssues, DEFAULT_ISSUE_FILTER).slice(0, 5)} onOpen={(id, from) => openDrawer({ kind: 'issue', id }, from)} label="Top priority issues" />
                     ) : (
                       <NoIssues />
                     )}
@@ -222,7 +257,7 @@ export default function App() {
                       </div>
                     </div>
                     {changes.length ? (
-                      <ChangesPreview changes={changes.slice(0, 5)} onOpen={(id) => openDrawer({ kind: 'change', id })} />
+                      <ChangesPreview changes={changes.slice(0, 5)} onOpen={(id, from) => openDrawer({ kind: 'change', id }, from)} />
                     ) : (
                       <EmptyState title="No changes in scope" />
                     )}
@@ -253,7 +288,7 @@ export default function App() {
                 </div>
               )}
               {shownIssues.length ? (
-                <IssueRows issues={shownIssues} onOpen={(id) => openDrawer({ kind: 'issue', id })} label="Issues" />
+                <IssueRows issues={shownIssues} onOpen={(id, from) => openDrawer({ kind: 'issue', id }, from)} label="Issues" />
               ) : (
                 <NoIssues onClear={issues.length ? () => setIssueFilter(DEFAULT_ISSUE_FILTER) : undefined} />
               )}
@@ -270,7 +305,7 @@ export default function App() {
                 <ChangeFilterBar filter={changeFilter} onFilter={setChangeFilter} changes={changes} settings={state.settings} />
               </div>
               {shownChanges.length ? (
-                <ChangeLogTable changes={shownChanges} settings={state.settings} onOpen={(id) => openDrawer({ kind: 'change', id })} />
+                <ChangeLogTable changes={shownChanges} settings={state.settings} onOpen={(id, from) => openDrawer({ kind: 'change', id }, from)} />
               ) : (
                 <EmptyState title="No changes match">
                   {changeFilter !== 'all' ? <button type="button" className="btn btn--link" onClick={() => setChangeFilter('all')}>Show all changes</button> : 'Nothing recorded for this site, date and meal.'}
@@ -283,7 +318,7 @@ export default function App() {
             <div className="stack">
               <section className="panel" aria-labelledby="wk-title">
                 <div className="panel__head">
-                  <h2 id="wk-title">Weekly stages</h2>
+                  <h2 id="wk-title">Weekly planning</h2>
                   <span className="meta">Projection week, independent of service date</span>
                   <div className="panel__tools">
                     <label className="ctl ctl--sm">
@@ -294,7 +329,7 @@ export default function App() {
                     </label>
                   </div>
                 </div>
-                <StageRows coverage={coverage} period="week" active={planStage} onSelect={(k) => setPlanStage(planStage === k ? null : (k as PlanningStage))} label="Weekly stage progress" />
+                <StageRows coverage={coverage} period="week" active={planStage} onOpen={(k, from) => openDrawer({ kind: 'stage', id: k }, from)} label="Weekly stage progress" />
               </section>
 
               <section className="panel" aria-labelledby="pc-title">
@@ -306,22 +341,22 @@ export default function App() {
                   filters={filters}
                   stage={planStage}
                   onClearStage={() => setPlanStage(null)}
-                  onOpenCafe={(id) => openDrawer({ kind: 'cafe', id })}
-                  onOpenIssue={(id) => openDrawer({ kind: 'issue', id })}
+                  onOpenCafe={(id, from) => openDrawer({ kind: 'planning', id }, from)}
+                  onOpenIssue={(id, from) => openDrawer({ kind: 'issue', id }, from)}
                   issues={state.issues}
                 />
               </section>
 
               <section className="panel" aria-labelledby="dy-title">
                 <div className="panel__head">
-                  <h2 id="dy-title">Daily stages</h2>
+                  <h2 id="dy-title">Daily progress</h2>
                   <span className="meta">Service date {serviceDateLabel(filters.date)} · {filters.meal === 'All' ? 'all meals' : filters.meal}</span>
                 </div>
                 {hasData ? (
                   <StageRows
                     coverage={coverage}
                     period="day"
-                    onSelect={(k) => { if (!isPlanningStage(k)) { setDailyStage(k as DailyStage); setQuick('all'); go('overview'); } }}
+                    onOpen={(k, from) => openDrawer({ kind: 'stage', id: k }, from)}
                     label="Daily stage progress"
                   />
                 ) : (
@@ -331,21 +366,32 @@ export default function App() {
             </div>
           )}
 
-          {view === 'data' && <DataStatus onOpenSource={(id) => openDrawer({ kind: 'source', id })} />}
+          {view === 'data' && <DataStatus onOpenSource={(id, from) => openDrawer({ kind: 'source', id }, from)} onOpenCutoff={(id, from) => openDrawer({ kind: 'cutoff', id }, from)} />}
         </main>
       </div>
 
       {drawer.length > 0 && (
         <Drawer
           stack={drawer}
-          onPush={(t) => setDrawer((d) => [...d, t])}
-          onBack={() => setDrawer((d) => d.slice(0, -1))}
+          onPush={pushDrawer}
+          onTrim={(n) => setDrawer((d) => d.slice(0, n))}
           onClose={closeDrawer}
           state={state}
           dispatch={dispatch}
           filters={filters}
           row={drawerRow}
           notify={notify}
+          onViewCafes={(siteId) => {
+            leaveDrawer();
+            viewCafes(siteId);
+            if (view !== 'overview') go('overview');
+            scrollToTable();
+          }}
+          onFilterStage={(k) => {
+            leaveDrawer();
+            if (isPlanningStage(k)) setPlanStage(k as PlanningStage);
+            else { setDailyStage(k as DailyStage); setQuick('all'); if (view !== 'overview') go('overview'); scrollToTable(); }
+          }}
         />
       )}
 

@@ -1,6 +1,6 @@
 import { useId } from 'react';
-import type { ReactNode } from 'react';
-import { Ban, CircleCheck, CircleHelp, CircleMinus, Clock, Inbox, Info, OctagonAlert, TriangleAlert } from 'lucide-react';
+import type { MouseEvent, ReactNode } from 'react';
+import { Ban, ChevronRight, CircleCheck, CircleHelp, CircleMinus, Clock, Inbox, Info, OctagonAlert, TriangleAlert } from 'lucide-react';
 import { TERMS } from '../data/masters';
 import { STATUS_LABEL } from '../lib/derive';
 import type { DisplayStatus, EvidenceAvailability, IssueStatus, Provenance, Severity } from '../data/types';
@@ -127,5 +127,34 @@ export function SectionHeader({ id, title, sub, children }: { id: string; title:
       </div>
       {children && <div className="section__tools">{children}</div>}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- record rows
+
+/** Opens a record's drawer; `from` is the element focus returns to when the drawer closes. */
+export type OpenFn = (id: string, from?: HTMLElement | null) => void;
+
+/**
+ * Makes a whole table row open its drawer on click. Nested controls (links, buttons, inputs, tooltips)
+ * keep their own action, and selecting text does not open anything. Keyboard users reach the row's
+ * explicit <ViewButton>, so rows stay plain table rows for assistive technology.
+ */
+export function rowOpen(open: (from: HTMLElement | null) => void, extraClass = '') {
+  return {
+    className: `is-clickable${extraClass ? ` ${extraClass}` : ''}`,
+    onClick: (e: MouseEvent<HTMLElement>) => {
+      if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label, .term')) return;
+      if (window.getSelection()?.toString()) return;
+      open(e.currentTarget.querySelector<HTMLElement>('.rowview'));
+    },
+  };
+}
+
+export function ViewButton({ label, onOpen }: { label: string; onOpen: (from: HTMLElement) => void }) {
+  return (
+    <button type="button" className="icon-btn icon-btn--sm rowview" onClick={(e) => onOpen(e.currentTarget)} aria-label={label} title="View details">
+      <ChevronRight size={16} aria-hidden="true" />
+    </button>
   );
 }
