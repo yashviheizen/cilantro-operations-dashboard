@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ArrowRight, Download, Search, X } from 'lucide-react';
+import { Download, Search, X } from 'lucide-react';
 import { fmtDateTime, isPast, relativeToNow, serviceDateLabel } from '../data/clock';
 import { SITES } from '../data/masters';
 import { REQUIRED_STAGES, ROW_STATUS, rowBlocker, rowStatus, siteById, STAGE_LABEL, STAGE_SHORT, worstRowStatus, bySeverity } from '../lib/derive';
@@ -59,14 +59,12 @@ interface Props {
   onClearStage: () => void;
   onOpenCafe: OpenFn;
   onOpenSite: OpenFn;
-  /** Intentional drill-down: scope the page to one site. */
-  onViewCafes: (siteId: string) => void;
   search: string;
   onSearch: (q: string) => void;
   onExport: (visible: CafeRow[], search: string) => void;
 }
 
-export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage, onOpenCafe, onOpenSite, onViewCafes, search, onSearch: setSearch, onExport }: Props) {
+export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage, onOpenCafe, onOpenSite, search, onSearch: setSearch, onExport }: Props) {
   const visible = useMemo(() => [...filterRows(rows, quick, search, stage)].sort(byStatus), [rows, quick, search, stage]);
   const narrowing = quick !== 'all' || !!search.trim() || !!stage;
   // "All sites" shows one summary per site; any narrowing shows the matching cafes so drill-downs land on records.
@@ -153,9 +151,16 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
                   </InfoTip>
                 </span>
               </th>
-              <th scope="col">Current blocker</th>
-              <th scope="col">Owner</th>
-              <th scope="col">Due</th>
+              <th scope="col">
+                <span className="th-info">
+                  Current blocker
+                  <InfoTip label="About the blocker columns">
+                    The highest-priority open blocker for the {siteMode ? 'site' : 'cafe'}. Blocker owner and Action due belong to that blocker.
+                  </InfoTip>
+                </span>
+              </th>
+              <th scope="col" title="Owner of the highest-priority blocker">Blocker owner</th>
+              <th scope="col" title="When the highest-priority blocker must be actioned">Action due</th>
               <th scope="col"><span className="sr-only">View</span></th>
             </tr>
           </thead>
@@ -164,7 +169,7 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
               ? SITES.map((site) => {
                   const siteRows = visible.filter((r) => r.site.id === site.id);
                   if (!siteRows.length) return null;
-                  return <SiteTr key={site.id} siteId={site.id} name={site.name} rows={siteRows} onOpen={onOpenSite} onViewCafes={onViewCafes} />;
+                  return <SiteTr key={site.id} siteId={site.id} name={site.name} rows={siteRows} onOpen={onOpenSite} />;
                 })
               : visible.map((r) => <CafeTr key={r.cafe.id} r={r} showSite={filters.siteId === 'all'} onOpen={onOpenCafe} />)}
           </tbody>
@@ -172,7 +177,7 @@ export function StatusTable({ rows, filters, quick, onQuick, stage, onClearStage
       )}
       <p className="panel__foot meta">
         {siteMode
-          ? `${SITES.filter((s) => visible.some((r) => r.site.id === s.id)).length} sites · ${rows.length} cafes (${live} in service). Click a site for its summary, or “View cafes” to list them.`
+          ? `${SITES.filter((s) => visible.some((r) => r.site.id === s.id)).length} sites · ${rows.length} cafes (${live} in service). Select a site row to explore its cafes and issues.`
           : `Showing ${visible.length} of ${rows.length} cafes (${live} in service).`}
       </p>
     </section>
@@ -209,7 +214,7 @@ function RowBadge({ s, sub, subTitle }: { s: RowStatus; sub?: string; subTitle?:
   );
 }
 
-function SiteTr({ siteId, name, rows, onOpen, onViewCafes }: { siteId: string; name: string; rows: CafeRow[]; onOpen: OpenFn; onViewCafes: (siteId: string) => void }) {
+function SiteTr({ siteId, name, rows, onOpen }: { siteId: string; name: string; rows: CafeRow[]; onOpen: OpenFn }) {
   const live = rows.filter((r) => r.applicable);
   const closed = rows.length - live.length;
   const ready = live.filter((r) => r.ready).length;
@@ -229,9 +234,6 @@ function SiteTr({ siteId, name, rows, onOpen, onViewCafes }: { siteId: string; n
         <span className="meta" title={closed ? `${rows.length} cafes, ${closed} not in service on this date` : undefined}>
           {' '}· {rows.length} cafes{closed ? ` · ${closed} closed` : ''}
         </span>
-        <button type="button" className="btn btn--link btn--sm sitecafes" onClick={() => onViewCafes(siteId)} aria-label={`View cafes at ${name}`}>
-          View cafes <ArrowRight size={12} aria-hidden="true" />
-        </button>
       </th>
       <td><RowBadge s={status} sub={live.length ? `${ready} of ${live.length} prep ready` : undefined} subTitle={`${ready} of ${live.length} cafes in service are preparation ready`} /></td>
       <td><Blocker text={b.text} full={b.full} more={b.more} /></td>

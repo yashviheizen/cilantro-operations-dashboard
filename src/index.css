@@ -458,7 +458,6 @@ button.irow:hover { background: var(--hover); }
 .crumbs__link:hover { background: var(--hover); }
 .ctl--status { display: inline-flex; align-items: center; gap: 6px; }
 .ctl__tag { font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-.sitecafes { margin-left: 8px; display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; }
 #table-title:focus { outline: none; }
 
 /* ---------------- split drawer: site panel (left) + cafe panel (right) */
@@ -481,3 +480,18 @@ button.irow:hover { background: var(--hover); }
   .drawer--split .dpanel--child .drawer__titles { flex: 1 1 100%; }
   .drawer--split .dpanel__close { display: none; }
 }
+
+/* Site drawer cafe list: full name on its own line, status + blocker beneath. */
+.cafelist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cafelist__item { display: flex; flex-direction: column; align-items: stretch; gap: 4px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 8px 10px; font: inherit; color: inherit; cursor: pointer; }
+.cafelist__item:hover { background: var(--hover); }
+.cafelist__item.is-selected { background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
+.cafelist__name { font-weight: 600; font-size: 14px; color: var(--primary); overflow-wrap: anywhere; }
+.cafelist__item.is-selected .cafelist__name { color: var(--ink); }
+.cafelist__meta { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.cafelist__meta .status { flex: none; }
+.cafelist__blocker { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsec .kv { border: 0; padding: 0; background: none; }
+.siteinfo > summary { cursor: pointer; font-size: 12px; font-weight: 650; color: var(--ink-2); }
+.siteinfo:not([open]) { gap: 0; }
+.stagelist__k--tip { display: inline-flex; align-items: center; gap: 4px; overflow: visible; }

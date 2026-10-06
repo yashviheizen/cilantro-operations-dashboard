@@ -117,13 +117,6 @@ export default function App() {
   }, []);
   /** Close after a drawer action that moves the user elsewhere — no focus return to the old row. */
   const leaveDrawer = () => { opener.current = null; setDrawer([]); };
-  /** Explicit drill-down from a site row or site drawer: scope the page to that site's cafes. */
-  const viewCafes = (siteId: string) => {
-    changeFilters({ siteId, cafeId: 'all' });
-    setQuick('all');
-    setSearch('');
-    setDailyStage(null);
-  };
   /** Breadcrumb "All sites": back to the site summary table, keeping date and meal. */
   const allSites = () => {
     changeFilters({ siteId: 'all', cafeId: 'all' });
@@ -222,7 +215,6 @@ export default function App() {
                   onClearStage={() => setDailyStage(null)}
                   onOpenCafe={(id, from) => openDrawer({ kind: 'cafe', id }, from)}
                   onOpenSite={(id, from) => openDrawer({ kind: 'site', id }, from)}
-                  onViewCafes={viewCafes}
                   search={search}
                   onSearch={setSearch}
                   onExport={(visible, search) => {
@@ -381,12 +373,6 @@ export default function App() {
           filters={filters}
           row={drawerRow}
           notify={notify}
-          onViewCafes={(siteId) => {
-            leaveDrawer();
-            viewCafes(siteId);
-            if (view !== 'overview') go('overview');
-            scrollToTable();
-          }}
           onFilterStage={(k) => {
             leaveDrawer();
             if (isPlanningStage(k)) setPlanStage(k as PlanningStage);

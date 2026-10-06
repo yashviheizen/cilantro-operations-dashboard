@@ -13,7 +13,7 @@ import type { CafeRow, Filters } from '../lib/derive';
 import { estimateIngredients } from '../lib/ingredients';
 import type { Action, DemoState } from '../lib/store';
 import type { Change, Issue, Quantity, Site, StageKey } from '../data/types';
-import { AvailabilityBadge, EmptyState, IssueStatusBadge, ProvenanceTag, SeverityBadge, StatusBadge, Term } from './ui';
+import { AvailabilityBadge, EmptyState, IssueStatusBadge, ProvenanceTag, SeverityBadge, StatusBadge, InfoTip, Term } from './ui';
 import { ackSummary, changeValue, dishName, scopeText, stageBreakdown, StageRows } from './Lists';
 import { CUTOFFS } from './DataStatus';
 
@@ -31,7 +31,6 @@ interface Props {
   row?: CafeRow;
   notify: (msg: string) => void;
   /** Filter the overview to one site and close the drawer. */
-  onViewCafes: (siteId: string) => void;
   /** Apply a stage filter (daily → overview table, weekly → planning table) and close the drawer. */
   onFilterStage: (k: StageKey) => void;
 }
@@ -44,7 +43,7 @@ const tkey = (t: DrawerTarget) => `${t.kind}:${t.id}`;
  * a compact site panel (left) and the cafe panel (right). Deeper issue/change details replace the right panel
  * content rather than adding more panels. Nothing here changes the global filters.
  */
-export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filters, row, notify, onViewCafes, onFilterStage }: Props) {
+export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filters, row, notify, onFilterStage }: Props) {
   const dialog = useRef<HTMLDivElement>(null);
   const closeBtn = useRef<HTMLButtonElement>(null);
   const childPanel = useRef<HTMLElement>(null);
@@ -159,7 +158,7 @@ export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filter
         </>;
       }
       case 'site':
-        return <SiteDetail siteId={t.id} filters={filters} state={state} onPush={onPush} onViewCafes={onViewCafes} selected={selected} compact={!!selected} />;
+        return <SiteDetail siteId={t.id} filters={filters} state={state} onPush={onPush} selected={selected} compact={!!selected} />;
       case 'cafe':
         if (row && row.cafe.id === t.id) return <CafeDetail row={row} filters={filters} state={state} onPush={onPush} />;
         break;
@@ -341,10 +340,16 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
               const c = row.stages[k];
               return (
                 <li key={k} title={[STAGE_EXPLAIN[k], c.note].filter(Boolean).join(' — ')}>
-                  <span className="stagelist__k">
-                    {STAGE_LABEL[k]}
-                    {!REQUIRED_STAGES.includes(k) && <span className="meta"> · not required</span>}
-                  </span>
+                  {REQUIRED_STAGES.includes(k) ? (
+                    <span className="stagelist__k">{STAGE_LABEL[k]}</span>
+                  ) : (
+                    <span className="stagelist__k stagelist__k--tip">
+                      <span className="truncate">{STAGE_LABEL[k]}</span>
+                      <InfoTip label={`About ${STAGE_LABEL[k].toLowerCase()} and readiness`}>
+                        Not included in preparation readiness. Still operationally important: it is tracked here, but its data is partly unavailable in the demo.
+                      </InfoTip>
+                    </span>
+                  )}
                   <StatusBadge status={c.status} text={c.text} compact />
                   <span className="meta">{c.dueAt ? `Due ${fmtDateTime(c.dueAt)}` : ''}</span>
                 </li>
@@ -473,8 +478,8 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
 
 // ---------------------------------------------------------------- site
 
-function SiteDetail({ siteId, filters, state, onPush, onViewCafes, selected, compact }: {
-  siteId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; onViewCafes: (siteId: string) => void;
+function SiteDetail({ siteId, filters, state, onPush, selected, compact }: {
+  siteId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void;
   /** Cafe currently open in the adjacent panel. */
   selected?: string;
   /** Parent-panel mode: keep the summary and cafe list, drop the long sections. */
@@ -489,6 +494,14 @@ function SiteDetail({ siteId, filters, state, onPush, onViewCafes, selected, com
   const status = worstRowStatus(rows.map(rowStatus));
   const top = rows.flatMap((r) => r.openIssues).sort(bySeverity)[0];
   const changes = changesInScope(state.changes, f).slice(0, 5);
+  const info = (
+    <dl className="kv">
+      <div><dt>Region</dt><dd>{site.region}</dd></div>
+      <div><dt>Kitchen</dt><dd>{site.arrangement} — {site.kitchen}</dd></div>
+      <div><dt>Service date</dt><dd>{serviceDateLabel(filters.date)} · {filters.meal === 'All' ? 'all meals' : filters.meal}</dd></div>
+      <div><dt>Final order cutoff</dt><dd>{deadlineFor('finalOrder', siteId)}</dd></div>
+    </dl>
+  );
 
   return (
     <>
@@ -496,39 +509,32 @@ function SiteDetail({ siteId, filters, state, onPush, onViewCafes, selected, com
         badge={hasData ? <StatusBadge status={ROW_STATUS[status].display} text={ROW_STATUS[status].label} /> : <StatusBadge status="unconfirmed" text="Data unavailable" />}
         lines={hasData && <span className="meta">{live.filter((r) => r.ready).length} of {live.length} cafes in service prep ready{rows.length > live.length && ` · ${rows.length - live.length} not in service`}</span>}
         next={top ? <><strong>Top blocker:</strong> {top.title} · {top.owner.name} · due {fmtDateTime(top.dueAt)}</> : hasData ? 'No open issues for this site in scope.' : undefined}
-      >
-        <div className="btn-row">
-          <button type="button" className="btn btn--sm" onClick={() => onViewCafes(siteId)}>
-            View cafes in table <ArrowRight size={14} aria-hidden="true" />
-          </button>
-        </div>
-      </StatusBlock>
-      <dl className="kv">
-        <div><dt>Region</dt><dd>{site.region}</dd></div>
-        <div><dt>Kitchen</dt><dd>{site.arrangement} — {site.kitchen}</dd></div>
-        <div><dt>Service date</dt><dd>{serviceDateLabel(filters.date)} · {filters.meal === 'All' ? 'all meals' : filters.meal}</dd></div>
-        <div><dt>Final order cutoff</dt><dd>{deadlineFor('finalOrder', siteId)}</dd></div>
-      </dl>
+      />
 
       <Section title={`Cafes (${rows.length}, ${live.length} in service)`}>
         {hasData ? (
-          <ul className="stagelist">
+          <ul className="cafelist">
             {rows.map((r) => {
               const s = rowStatus(r);
               const b = rowBlocker(r);
+              const on = selected === r.cafe.id;
               return (
-                <li key={r.cafe.id} className={selected === r.cafe.id ? 'is-selected' : undefined}>
+                <li key={r.cafe.id}>
                   <button
                     type="button"
-                    className="link strong stagelist__k"
+                    className={`cafelist__item${on ? ' is-selected' : ''}`}
                     data-target={`cafe:${r.cafe.id}`}
-                    aria-current={selected === r.cafe.id ? 'true' : undefined}
+                    aria-current={on ? 'true' : undefined}
                     onClick={() => onPush({ kind: 'cafe', id: r.cafe.id })}
                   >
-                    {r.cafe.name}
+                    <span className="cafelist__name">{r.cafe.name}</span>
+                    <span className="cafelist__meta">
+                      <StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} compact />
+                      <span className="cafelist__blocker" title={`${b.full}${b.owner !== '—' ? ` · ${b.owner}` : ''}`}>
+                        {b.text}{b.more > 0 && ` +${b.more}`}
+                      </span>
+                    </span>
                   </button>
-                  <StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} compact />
-                  <span className="meta" title={`${b.full}${b.owner !== '—' ? ` · ${b.owner}` : ''}`}>{b.text}{b.more > 0 && ` +${b.more}`}{b.owner !== '—' && ` · ${b.owner}`}</span>
                 </li>
               );
             })}
@@ -537,6 +543,15 @@ function SiteDetail({ siteId, filters, state, onPush, onViewCafes, selected, com
           <p className="meta">Data unavailable for this date in the demo.</p>
         )}
       </Section>
+
+      {compact ? (
+        <details className="dsec siteinfo">
+          <summary>Site information</summary>
+          {info}
+        </details>
+      ) : (
+        <Section title="Site information">{info}</Section>
+      )}
 
       {!compact && <>
       <Section title={`Daily progress · ${serviceDateLabel(filters.date)}`}>
@@ -672,7 +687,7 @@ function StageDetail({ k, filters, state, onPush, onFilterStage }: {
       <StatusBlock
         badge={cov.total ? <StatusBadge status={cov.status} /> : <StatusBadge status={!weekly && !hasData ? 'unconfirmed' : 'not_applicable'} text={!weekly && !hasData ? 'Data unavailable' : undefined} />}
         lines={<span className="meta">{cov.total ? `${cov.complete} of ${cov.total} ${weekly ? 'cafes' : 'cafes in service'} complete` : 'No cafes in scope'}{breakdown && ` · ${breakdown}`}{notInService > 0 && ` · ${notInService} not in service (excluded)`}</span>}
-        next={<>{STAGE_EXPLAIN[k]} Owner role: {STAGE_OWNER_ROLE[k]}.{!weekly && !required && ' Tracked, but not required for preparation ready.'}</>}
+        next={<>{STAGE_EXPLAIN[k]} Owner role: {STAGE_OWNER_ROLE[k]}.{!weekly && !required && ' Not included in preparation readiness, but still operationally important.'}</>}
       >
         {affected.length > 0 && (
           <div className="btn-row">
