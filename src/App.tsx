@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { TOMORROW, serviceDateLabel } from './data/clock';
-import { CAFES, PROJECTION_WEEKS } from './data/masters';
+import { PROJECTION_WEEKS } from './data/masters';
 import { SettingsMenu, Sidebar, TopBar, VIEWS } from './components/Shell';
 import type { View } from './components/Shell';
 import { ScopeBar, SummaryCards } from './components/Overview';
@@ -17,9 +17,9 @@ import { Drawer } from './components/Drawer';
 import type { DrawerTarget } from './components/Drawer';
 import { EmptyState } from './components/ui';
 import {
-  buildCafeRow, cafeRows, changesInScope, hasDataFor, isOpen, issuesInScope, planningRows, summarize, workflowCoverage,
+  cafeRows, changesInScope, hasDataFor, isOpen, issuesInScope, planningRows, summarize, workflowCoverage,
 } from './lib/derive';
-import type { CafeRow, DailyStage, Filters, PlanningStage } from './lib/derive';
+import type { DailyStage, Filters, PlanningStage } from './lib/derive';
 import { downloadCsv, rowsToCsv } from './lib/csv';
 import { hasLocalChanges, useDemoStore } from './lib/store';
 import type { StageKey } from './data/types';
@@ -125,15 +125,6 @@ export default function App() {
     setDailyStage(null);
     requestAnimationFrame(() => document.getElementById('table-title')?.focus({ preventScroll: true }));
   };
-  /** Site → cafe opens beside the site panel; deeper details replace the right panel instead of chaining. */
-  const pushDrawer = (t: DrawerTarget) =>
-    setDrawer((d) => {
-      if (d[0]?.kind === 'site' && t.kind === 'cafe') {
-        const cafe = CAFES.find((c) => c.id === t.id)!;
-        return [d[0].id === cafe.siteId ? d[0] : { kind: 'site', id: cafe.siteId }, t];
-      }
-      return d.length >= 3 ? [...d.slice(0, 2), t] : [...d, t];
-    });
   const closeMobileNav = useCallback(() => setMobileNav(false), []);
 
   const activeCard: CardKey | null = quick === 'not_ready' ? 'ready' : quick === 'order_pending' ? 'orders' : null;
@@ -156,9 +147,6 @@ export default function App() {
     }
   };
 
-  const topDrawer = drawer[drawer.length - 1];
-  let drawerRow: CafeRow | undefined;
-  if (topDrawer?.kind === 'cafe') drawerRow = buildCafeRow(CAFES.find((c) => c.id === topDrawer.id)!, filters, state.issues);
 
   const title = VIEWS.find((v) => v.key === view)!.label;
   const shownIssues = filterIssues(issues, issueFilter);
@@ -365,13 +353,11 @@ export default function App() {
       {drawer.length > 0 && (
         <Drawer
           stack={drawer}
-          onPush={pushDrawer}
-          onTrim={(n) => setDrawer((d) => d.slice(0, n))}
+          onStack={setDrawer}
           onClose={closeDrawer}
           state={state}
           dispatch={dispatch}
           filters={filters}
-          row={drawerRow}
           notify={notify}
           onFilterStage={(k) => {
             leaveDrawer();

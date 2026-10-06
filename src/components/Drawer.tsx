@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, Check, MessageSquarePlus, Play, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronRight, MessageSquarePlus, Play, X } from 'lucide-react';
 import { fmtDateTime, relativeToNow, serviceDateLabel } from '../data/clock';
-import { DATA_SOURCES, DISHES, PROJECTION_WEEKS, SITES } from '../data/masters';
+import { CAFES, DATA_SOURCES, DISHES, PROJECTION_WEEKS, SITES } from '../data/masters';
 import { ASSIGNABLE, WEEKLY_PLANNING } from '../data/operations';
 import {
-  cafeById, cafeRows, DAILY_STAGES, fmtQty, hasDataFor, isUnusualChange, PLANNING_STAGES, planningRows, siteById, STAGE_EXPLAIN, STAGE_LABEL,
+  buildCafeRow, cafeById, cafeRows, DAILY_STAGES, fmtQty, hasDataFor, isUnusualChange, PLANNING_STAGES, planningRows, siteById, STAGE_EXPLAIN, STAGE_LABEL,
   stageStatus, stageText, resolvedSet, workflowCoverage, rowStatus, rowBlocker, ROW_STATUS, REQUIRED_STAGES, deadlineFor,
   changesInScope, CUTOFF_KEY, STAGE_OWNER_ROLE, worst, worstRowStatus, bySeverity,
 } from '../lib/derive';
@@ -21,57 +21,68 @@ export type DrawerTarget = { kind: 'site' | 'cafe' | 'planning' | 'stage' | 'cut
 
 interface Props {
   stack: DrawerTarget[];
-  onPush: (t: DrawerTarget) => void;
-  /** Keep the first n entries of the stack (n ≥ 1). */
-  onTrim: (n: number) => void;
+  /** Replace the drawer stack (never empty; closing goes through onClose). */
+  onStack: (next: DrawerTarget[]) => void;
   onClose: () => void;
   state: DemoState;
   dispatch: (a: Action) => void;
   filters: Filters;
-  row?: CafeRow;
   notify: (msg: string) => void;
-  /** Filter the overview to one site and close the drawer. */
   /** Apply a stage filter (daily → overview table, weekly → planning table) and close the drawer. */
   onFilterStage: (k: StageKey) => void;
 }
 
 const FOCUSABLE = 'button:not([disabled]), select, input, textarea, [href], [tabindex]:not([tabindex="-1"])';
 const tkey = (t: DrawerTarget) => `${t.kind}:${t.id}`;
+const MAX_DEPTH = 7;
+
+/** How many leading stack entries are hierarchy context (site → cafe) that stay visible as their own panels. */
+function contextDepth(stack: DrawerTarget[]): number {
+  if (stack[0]?.kind === 'site') return stack[1]?.kind === 'cafe' ? 2 : 1;
+  return stack[0]?.kind === 'cafe' ? 1 : 0;
+}
 
 /**
- * One right-hand drawer. A site opened at the root shows its cafes; picking a cafe splits the drawer into
- * a compact site panel (left) and the cafe panel (right). Deeper issue/change details replace the right panel
- * content rather than adding more panels. Nothing here changes the global filters.
+ * One right-hand drawer. Site and cafe records open as side-by-side panels (site → cafe → detail); the newest
+ * panel is the widest. An issue or change opened from the cafe takes a third panel, and records opened from
+ * there reuse that panel with a Back action instead of adding more. Other records use a single panel with Back.
+ * Nothing here changes the global filters.
  */
-export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filters, row, notify, onFilterStage }: Props) {
+export function Drawer({ stack, onStack, onClose, state, dispatch, filters, notify, onFilterStage }: Props) {
   const dialog = useRef<HTMLDivElement>(null);
-  const closeBtn = useRef<HTMLButtonElement>(null);
-  const childPanel = useRef<HTMLElement>(null);
-  const childTitle = useRef<HTMLHeadingElement>(null);
+  const newest = useRef<HTMLElement>(null);
+  const newestTitle = useRef<HTMLHeadingElement>(null);
   const popped = useRef<DrawerTarget | null>(null);
   const top = stack[stack.length - 1];
-  const split = stack.length > 1 && stack[0].kind === 'site';
+  const ctxN = contextDepth(stack);
 
   const trim = (n: number) => {
     popped.current = stack[n] ?? null;
-    onTrim(n);
+    onStack(stack.slice(0, n));
   };
-  const back = () => (stack.length > 1 ? trim(stack.length - 1) : onClose());
+  /** Open `t` from the panel showing stack[level]: anything deeper than that panel is replaced. */
+  const pushAt = (level: number, t: DrawerTarget) => {
+    const seen = stack.findIndex((x) => tkey(x) === tkey(t));
+    if (seen >= 0 && seen <= level) return trim(seen + 1);
+    if (stack[0].kind === 'site' && t.kind === 'cafe') {
+      const siteId = cafeById(t.id).siteId;
+      return onStack([stack[0].id === siteId ? stack[0] : { kind: 'site', id: siteId }, t]);
+    }
+    const next = [...stack.slice(0, level + 1), t];
+    onStack(next.length > MAX_DEPTH ? [...next.slice(0, MAX_DEPTH - 1), t] : next);
+  };
 
-  // Focus follows the panel that changed: into a newly opened detail, or back to the item that opened it.
+  // Focus follows the panel that changed: into a newly opened panel, or back to the item that opened the closed one.
   useEffect(() => {
     const p = popped.current;
     popped.current = null;
-    const returnTo = p && dialog.current?.querySelector<HTMLElement>(`[data-target="${tkey(p)}"]`);
+    const returnTo = p && [...(dialog.current?.querySelectorAll<HTMLElement>(`[data-target="${tkey(p)}"]`) ?? [])].find((el) => el.offsetParent !== null);
     if (returnTo) returnTo.focus();
-    else if (split) {
-      childPanel.current?.scrollTo({ top: 0 });
-      childTitle.current?.focus({ preventScroll: true });
-    } else {
-      closeBtn.current?.focus();
-      dialog.current?.scrollTo({ top: 0 });
+    else {
+      newest.current?.scrollTo({ top: 0 });
+      newestTitle.current?.focus({ preventScroll: true });
     }
-  }, [top?.kind, top?.id, stack.length, split]);
+  }, [top?.kind, top?.id, stack.length]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -103,11 +114,12 @@ export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filter
   const place = filters.siteId === 'all' ? 'All sites' : filters.cafeId === 'all' ? siteById(filters.siteId).name : `${siteById(filters.siteId).name} · ${cafeById(filters.cafeId).name}`;
 
   /** Header text for one drawer entry. */
-  const meta = (t: DrawerTarget): { kind: string; title: string; ctx: string; crumb: string } | null => {
+  const meta = (t: DrawerTarget): { kind: string; title: string; ctx: string; crumb: string } => {
     switch (t.kind) {
       case 'source': {
         const d = DATA_SOURCES.find((x) => x.id === t.id);
-        return d ? { kind: 'Data source', title: d.name, ctx: 'All sites · demo snapshot', crumb: d.name } : null;
+        if (d) return { kind: 'Data source', title: d.name, ctx: 'All sites · demo snapshot', crumb: d.name };
+        break;
       }
       case 'site': {
         const st = siteById(t.id);
@@ -128,21 +140,28 @@ export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filter
       }
       case 'cutoff': {
         const c = CUTOFFS.find((x) => x.key === t.id);
-        return c ? { kind: 'Cutoff rule', title: c.label, ctx: 'All sites · rules as recorded for the demo', crumb: c.label } : null;
+        if (c) return { kind: 'Cutoff rule', title: c.label, ctx: 'All sites · rules as recorded for the demo', crumb: c.label };
+        break;
       }
       case 'issue': {
         const i = state.issues.find((x) => x.id === t.id);
-        return i ? { kind: `Issue ${i.id}`, title: i.title, ctx: scopeText(i.scope, i.siteId, i.cafeId), crumb: `Issue ${i.id}` } : null;
+        if (i) return { kind: `Issue ${i.id}`, title: i.title, ctx: scopeText(i.scope, i.siteId, i.cafeId), crumb: i.short };
+        break;
       }
       case 'change': {
         const c = state.changes.find((x) => x.id === t.id);
-        return c ? { kind: `Change ${c.id}`, title: c.kind, ctx: scopeText(c.scope, c.siteId, c.cafeId), crumb: `Change ${c.id}` } : null;
+        if (c) return { kind: `Change ${c.id}`, title: c.kind, ctx: scopeText(c.scope, c.siteId, c.cafeId), crumb: `${c.kind}: ${c.dishId ? dishName(c.dishId) : c.record}` };
+        break;
       }
     }
+    return { kind: 'Details', title: 'Details', ctx: '', crumb: 'Details' };
   };
 
-  /** Body for one drawer entry. `selected` highlights the cafe open beside a site panel. */
-  const body = (t: DrawerTarget, selected?: string) => {
+  /** Body for stack[level]. `selected` is the record open in the next panel, highlighted here. */
+  const body = (level: number, selected?: DrawerTarget) => {
+    const t = stack[level];
+    const onPush = (x: DrawerTarget) => pushAt(level, x);
+    const sel = selected ? tkey(selected) : undefined;
     switch (t.kind) {
       case 'source': {
         const source = DATA_SOURCES.find((d) => d.id === t.id);
@@ -158,12 +177,14 @@ export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filter
         </>;
       }
       case 'site':
-        return <SiteDetail siteId={t.id} filters={filters} state={state} onPush={onPush} selected={selected} compact={!!selected} />;
-      case 'cafe':
-        if (row && row.cafe.id === t.id) return <CafeDetail row={row} filters={filters} state={state} onPush={onPush} />;
+        return <SiteDetail siteId={t.id} filters={filters} state={state} onPush={onPush} selected={sel} compact={stack[level + 1]?.kind === 'cafe'} />;
+      case 'cafe': {
+        const cafe = CAFES.find((c) => c.id === t.id);
+        if (cafe) return <CafeDetail row={buildCafeRow(cafe, filters, state.issues)} filters={filters} state={state} onPush={onPush} selected={sel} />;
         break;
+      }
       case 'planning':
-        return <PlanningDetail cafeId={t.id} filters={filters} state={state} onPush={onPush} />;
+        return <PlanningDetail cafeId={t.id} filters={filters} state={state} onPush={onPush} selected={sel} />;
       case 'stage':
         return <StageDetail k={t.id as StageKey} filters={filters} state={state} onPush={onPush} onFilterStage={onFilterStage} />;
       case 'cutoff':
@@ -182,87 +203,115 @@ export function Drawer({ stack, onPush, onTrim, onClose, state, dispatch, filter
     return <EmptyState title="Details unavailable" />;
   };
 
-  const topMeta = meta(top) ?? { kind: 'Details', title: 'Details', ctx: '', crumb: 'Details' };
+  const crumbs = (
+    <nav className="dcrumbs" aria-label="Drawer location">
+      <ol>
+        {stack.map((t, i) => (
+          <li key={tkey(t)}>
+            {i === stack.length - 1 ? (
+              <span aria-current="page">{meta(t).crumb}</span>
+            ) : (
+              <button type="button" className="link" onClick={() => trim(i + 1)}>{meta(t).crumb}</button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+  const prevCrumb = stack.length > 1 ? meta(stack[stack.length - 2]).crumb : '';
 
-  if (split) {
-    const parent = stack[0];
-    const pMeta = meta(parent)!;
-    const selectedCafe = stack[1].kind === 'cafe' ? stack[1].id : undefined;
+  // Single panel for records outside the site → cafe hierarchy (opened from tables, stages, cutoffs…).
+  if (!ctxN) {
+    const m = meta(top);
     return (
       <div className="drawer-layer">
         <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-        <div className="drawer drawer--split" role="dialog" aria-modal="true" aria-labelledby="drawer-title drawer-child-title" ref={dialog}>
-          <section className="dpanel dpanel--parent" aria-labelledby="drawer-title">
+        <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby={m.ctx ? 'drawer-ctx' : undefined} ref={dialog}>
+          <section className="dpanel dpanel--solo" ref={newest}>
             <div className="drawer__head">
+              {stack.length > 1 && (
+                <button type="button" className="icon-btn" onClick={() => trim(stack.length - 1)} aria-label={`Back to ${prevCrumb}`}>
+                  <ArrowLeft size={18} aria-hidden="true" />
+                </button>
+              )}
               <div className="drawer__titles">
-                <span className="drawer__kind">{pMeta.kind}</span>
-                <h2 id="drawer-title">{pMeta.title}</h2>
-                <span className="drawer__ctx">{pMeta.ctx}</span>
+                {stack.length > 1 ? crumbs : <span className="drawer__kind">{m.kind}</span>}
+                <h2 id="drawer-title" tabIndex={-1} ref={newestTitle}>{m.title}</h2>
+                {m.ctx && <span className="drawer__ctx" id="drawer-ctx">{m.ctx}</span>}
               </div>
-              <button type="button" className="icon-btn" onClick={onClose} ref={closeBtn} aria-label={`Close ${pMeta.title} details (closes both panels)`}>
+              <button type="button" className="icon-btn" onClick={onClose} aria-label="Close details (Escape)">
                 <X size={18} aria-hidden="true" />
               </button>
             </div>
-            <div className="drawer__body">{body(parent, selectedCafe ?? '')}</div>
-          </section>
-
-          <section className="dpanel dpanel--child" aria-labelledby="drawer-child-title" ref={childPanel}>
-            <div className="drawer__head">
-              <button type="button" className="btn btn--sm dpanel__back" onClick={() => trim(1)}>
-                <ArrowLeft size={14} aria-hidden="true" /> Back to {pMeta.title}
-              </button>
-              <div className="drawer__titles">
-                <nav className="dcrumbs" aria-label="Drawer location">
-                  <ol>
-                    {stack.map((t, i) => {
-                      const m = meta(t);
-                      const last = i === stack.length - 1;
-                      return (
-                        <li key={tkey(t)}>
-                          {last ? (
-                            <span aria-current="page">{m?.crumb ?? 'Details'}</span>
-                          ) : (
-                            <button type="button" className="link" onClick={() => trim(i + 1)} data-target={i > 0 ? tkey(t) : undefined}>{m?.crumb}</button>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </nav>
-                <h2 id="drawer-child-title" tabIndex={-1} ref={childTitle}>{topMeta.title}</h2>
-                <span className="drawer__ctx">{topMeta.ctx}</span>
-              </div>
-              <button type="button" className="icon-btn dpanel__close" onClick={() => trim(1)} aria-label={`Close ${meta(stack[1])?.crumb ?? 'detail'} panel (Escape)`}>
-                <X size={18} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="drawer__body">{body(top)}</div>
+            <div className="drawer__body">{body(stack.length - 1)}</div>
           </section>
         </div>
       </div>
     );
   }
 
+  // Panels: one per context entry, plus one detail panel for whatever was opened from the last context entry.
+  const panels = stack.slice(0, ctxN).map((_, i) => i);
+  if (stack.length > ctxN) panels.push(stack.length - 1);
+  const count = panels.length;
+  const history = stack.length > ctxN + 1;
+
   return (
     <div className="drawer-layer">
       <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-      <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby={topMeta.ctx ? 'drawer-ctx' : undefined} ref={dialog}>
-        <div className="drawer__head">
-          {stack.length > 1 && (
-            <button type="button" className="icon-btn" onClick={back} aria-label={`Back to ${meta(stack[stack.length - 2])?.crumb ?? 'previous detail'}`}>
-              <ArrowLeft size={18} aria-hidden="true" />
-            </button>
-          )}
-          <div className="drawer__titles">
-            <span className="drawer__kind">{topMeta.kind}</span>
-            <h2 id="drawer-title">{topMeta.title}</h2>
-            {topMeta.ctx && <span className="drawer__ctx" id="drawer-ctx">{topMeta.ctx}</span>}
-          </div>
-          <button type="button" className="icon-btn" onClick={onClose} ref={closeBtn} aria-label="Close details (Escape)">
-            <X size={18} aria-hidden="true" />
-          </button>
-        </div>
-        <div className="drawer__body">{body(top)}</div>
+      <div className={`drawer drawer--panels drawer--p${count}`} role="dialog" aria-modal="true" aria-labelledby="drawer-title" ref={dialog}>
+        {panels.map((level, idx) => {
+          const t = stack[level];
+          const m = meta(t);
+          const isNewest = idx === count - 1;
+          const isDetail = idx >= ctxN;
+          // The panel that closes when this one's X is used: the detail panel closes with its Back history.
+          const closeTo = isDetail ? ctxN : level;
+          return (
+            <section
+              key={isDetail ? 'detail' : tkey(t)}
+              className={`dpanel ${isNewest ? 'dpanel--main' : 'dpanel--ctx'}`}
+              aria-labelledby={`dp-title-${idx}`}
+              ref={isNewest ? newest : undefined}
+            >
+              {!isNewest && (
+                <button type="button" className="dpanel__rail" onClick={() => trim(ctxN)} aria-label={`Show ${m.title} panel`} title={m.title}>
+                  <ArrowLeft size={16} aria-hidden="true" />
+                  <span>{m.title}</span>
+                </button>
+              )}
+              <div className="drawer__head">
+                {isNewest && idx > 0 && (
+                  <button type="button" className={`btn btn--sm dpanel__back${history ? ' is-shown' : ''}`} onClick={() => trim(stack.length - 1)}>
+                    <ArrowLeft size={14} aria-hidden="true" /> Back to {prevCrumb}
+                  </button>
+                )}
+                <div className="drawer__titles">
+                  {isNewest && idx > 0 ? crumbs : <span className="drawer__kind">{m.kind}</span>}
+                  <h2 id={idx === 0 ? 'drawer-title' : `dp-title-${idx}`} tabIndex={-1} ref={isNewest ? newestTitle : undefined}>{m.title}</h2>
+                  {m.ctx && <span className="drawer__ctx">{m.ctx}</span>}
+                </div>
+                {idx === 0 ? (
+                  <button type="button" className="icon-btn" onClick={onClose} aria-label={count > 1 ? `Close ${m.title} and all panels` : 'Close details (Escape)'}>
+                    <X size={18} aria-hidden="true" />
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" className="icon-btn dpanel__close" onClick={() => trim(closeTo)} aria-label={`Close ${m.crumb} panel${isNewest ? ' (Escape)' : ''}`}>
+                      <X size={18} aria-hidden="true" />
+                    </button>
+                    {isNewest && (
+                      <button type="button" className="icon-btn dpanel__closeall" onClick={onClose} aria-label="Close all panels">
+                        <X size={18} aria-hidden="true" />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="drawer__body">{body(level, isNewest ? undefined : stack[level + 1])}</div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );
@@ -276,6 +325,19 @@ function StatusBlock({ badge, lines, next, children }: { badge: ReactNode; lines
       {next && <p className="drawer__next">{next}</p>}
       {children}
     </div>
+  );
+}
+
+/** A row that opens a record in the next panel: whole row clickable, chevron, highlighted while open. */
+function NavRow({ target, selected, onOpen, children }: { target: DrawerTarget; selected?: string; onOpen: (t: DrawerTarget) => void; children: ReactNode }) {
+  const on = selected === tkey(target);
+  return (
+    <li>
+      <button type="button" className={`navrow${on ? ' is-selected' : ''}`} data-target={tkey(target)} aria-current={on ? 'true' : undefined} onClick={() => onOpen(target)}>
+        <span className="navrow__text">{children}</span>
+        <ChevronRight size={16} className="navrow__chev" aria-hidden="true" />
+      </button>
+    </li>
   );
 }
 
@@ -294,7 +356,7 @@ function LocalNote() {
 
 // ---------------------------------------------------------------- cafe
 
-function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void }) {
+function CafeDetail({ row, filters, state, onPush, selected }: { row: CafeRow; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; selected?: string }) {
   const resolved = resolvedSet(state.issues);
   const planning = WEEKLY_PLANNING.find((w) => w.cafeId === row.cafe.id && w.weekId === filters.weekId);
   const changes = state.changes.filter((c) => c.cafeId === row.cafe.id && (c.scope.kind === 'week' ? c.scope.weekId === filters.weekId : c.scope.date === filters.date));
@@ -319,13 +381,12 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
 
       <Section title="Open issues">
         {[...row.openIssues, ...weekIssues].length ? (
-          <ul className="links">
+          <ul className="navlist">
             {[...row.openIssues, ...weekIssues].map((i) => (
-              <li key={i.id}>
-                <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'issue', id: i.id })}>
-                  <SeverityBadge severity={i.severity} /> {i.short}
-                </button>
-              </li>
+              <NavRow key={i.id} target={{ kind: 'issue', id: i.id }} selected={selected} onOpen={onPush}>
+                <span className="navrow__name"><SeverityBadge severity={i.severity} /> {i.short}</span>
+                <span className="navrow__meta">{i.owner.name} · due {fmtDateTime(i.dueAt)}</span>
+              </NavRow>
             ))}
           </ul>
         ) : (
@@ -459,13 +520,12 @@ function CafeDetail({ row, filters, state, onPush }: { row: CafeRow; filters: Fi
 
       <Section title="Recent changes">
         {changes.length ? (
-          <ul className="links">
+          <ul className="navlist">
             {changes.map((c) => (
-              <li key={c.id}>
-                <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'change', id: c.id })}>
-                  {c.kind}: {c.dishId ? dishName(c.dishId) : c.record} {changeValue(c).prev} → {changeValue(c).next}
-                </button>
-              </li>
+              <NavRow key={c.id} target={{ kind: 'change', id: c.id }} selected={selected} onOpen={onPush}>
+                <span className="navrow__name">{c.kind}: {c.dishId ? dishName(c.dishId) : c.record}</span>
+                <span className="navrow__meta">{changeValue(c).prev} → {changeValue(c).next} · {fmtDateTime(c.at)}</span>
+              </NavRow>
             ))}
           </ul>
         ) : (
@@ -513,29 +573,20 @@ function SiteDetail({ siteId, filters, state, onPush, selected, compact }: {
 
       <Section title={`Cafes (${rows.length}, ${live.length} in service)`}>
         {hasData ? (
-          <ul className="cafelist">
+          <ul className="navlist">
             {rows.map((r) => {
               const s = rowStatus(r);
               const b = rowBlocker(r);
-              const on = selected === r.cafe.id;
               return (
-                <li key={r.cafe.id}>
-                  <button
-                    type="button"
-                    className={`cafelist__item${on ? ' is-selected' : ''}`}
-                    data-target={`cafe:${r.cafe.id}`}
-                    aria-current={on ? 'true' : undefined}
-                    onClick={() => onPush({ kind: 'cafe', id: r.cafe.id })}
-                  >
-                    <span className="cafelist__name">{r.cafe.name}</span>
-                    <span className="cafelist__meta">
-                      <StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} compact />
-                      <span className="cafelist__blocker" title={`${b.full}${b.owner !== '—' ? ` · ${b.owner}` : ''}`}>
-                        {b.text}{b.more > 0 && ` +${b.more}`}
-                      </span>
+                <NavRow key={r.cafe.id} target={{ kind: 'cafe', id: r.cafe.id }} selected={selected} onOpen={onPush}>
+                  <span className="navrow__name">{r.cafe.name}</span>
+                  <span className="navrow__meta">
+                    <StatusBadge status={ROW_STATUS[s].display} text={ROW_STATUS[s].label} compact />
+                    <span className="navrow__blocker" title={`${b.full}${b.owner !== '—' ? ` · ${b.owner}` : ''}`}>
+                      {b.text}{b.more > 0 && ` +${b.more}`}
                     </span>
-                  </button>
-                </li>
+                  </span>
+                </NavRow>
               );
             })}
           </ul>
@@ -562,38 +613,36 @@ function SiteDetail({ siteId, filters, state, onPush, selected, compact }: {
       </Section>
 
       <Section title="Recent changes">
-        <ChangeLinks changes={changes} onPush={onPush} />
+        <ChangeLinks changes={changes} onPush={onPush} selected={selected} />
       </Section>
       </>}
     </>
   );
 }
 
-function ChangeLinks({ changes, onPush }: { changes: Change[]; onPush: (t: DrawerTarget) => void }) {
+function ChangeLinks({ changes, onPush, selected }: { changes: Change[]; onPush: (t: DrawerTarget) => void; selected?: string }) {
   if (!changes.length) return <p className="muted">No recorded changes in scope.</p>;
   return (
-    <ul className="links">
+    <ul className="navlist">
       {changes.map((c) => (
-        <li key={c.id}>
-          <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'change', id: c.id })}>
-            {fmtDateTime(c.at)} · {cafeById(c.cafeId).name} · {c.dishId ? dishName(c.dishId) : c.record} {changeValue(c).prev} → {changeValue(c).next}
-          </button>
-        </li>
+        <NavRow key={c.id} target={{ kind: 'change', id: c.id }} selected={selected} onOpen={onPush}>
+          <span className="navrow__name">{cafeById(c.cafeId).name} · {c.dishId ? dishName(c.dishId) : c.record}</span>
+          <span className="navrow__meta">{changeValue(c).prev} → {changeValue(c).next} · {fmtDateTime(c.at)}</span>
+        </NavRow>
       ))}
     </ul>
   );
 }
 
-function IssueLinks({ issues, onPush, empty }: { issues: Issue[]; onPush: (t: DrawerTarget) => void; empty: string }) {
+function IssueLinks({ issues, onPush, empty, selected }: { issues: Issue[]; onPush: (t: DrawerTarget) => void; empty: string; selected?: string }) {
   if (!issues.length) return <p className="muted">{empty}</p>;
   return (
-    <ul className="links">
+    <ul className="navlist">
       {issues.map((i) => (
-        <li key={i.id}>
-          <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'issue', id: i.id })}>
-            <SeverityBadge severity={i.severity} /> {i.short} · {i.owner.name} · due {fmtDateTime(i.dueAt)}
-          </button>
-        </li>
+        <NavRow key={i.id} target={{ kind: 'issue', id: i.id }} selected={selected} onOpen={onPush}>
+          <span className="navrow__name"><SeverityBadge severity={i.severity} /> {i.short}</span>
+          <span className="navrow__meta">{i.owner.name} · due {fmtDateTime(i.dueAt)}</span>
+        </NavRow>
       ))}
     </ul>
   );
@@ -601,7 +650,7 @@ function IssueLinks({ issues, onPush, empty }: { issues: Issue[]; onPush: (t: Dr
 
 // ---------------------------------------------------------------- weekly planning (one cafe, one projection week)
 
-function PlanningDetail({ cafeId, filters, state, onPush }: { cafeId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void }) {
+function PlanningDetail({ cafeId, filters, state, onPush, selected }: { cafeId: string; filters: Filters; state: DemoState; onPush: (t: DrawerTarget) => void; selected?: string }) {
   const cafe = cafeById(cafeId);
   const pr = planningRows({ ...filters, siteId: cafe.siteId, cafeId }, state.issues)[0];
   const status = worst(PLANNING_STAGES.map((k) => pr.stages[k].status));
@@ -647,10 +696,10 @@ function PlanningDetail({ cafeId, filters, state, onPush }: { cafeId: string; fi
       </dl>
 
       <Section title="Related issues">
-        <IssueLinks issues={issues} onPush={onPush} empty="No open issues for this cafe in this projection week." />
+        <IssueLinks issues={issues} onPush={onPush} selected={selected} empty="No open issues for this cafe in this projection week." />
       </Section>
       <Section title="Weekly changes">
-        <ChangeLinks changes={changes} onPush={onPush} />
+        <ChangeLinks changes={changes} onPush={onPush} selected={selected} />
       </Section>
       <div className="btn-row">
         <button type="button" className="btn btn--sm" onClick={() => onPush({ kind: 'cafe', id: cafeId })}>
@@ -825,7 +874,7 @@ function IssueDetail({ issue, state, dispatch, onPush, notify }: {
           <ul className="links">
             {relIssues.map((i) => (
               <li key={i.id}>
-                <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'issue', id: i.id })}>
+                <button type="button" className="btn btn--link" data-target={`issue:${i.id}`} onClick={() => onPush({ kind: 'issue', id: i.id })}>
                   <SeverityBadge severity={i.severity} /> {i.title}
                 </button>
               </li>
@@ -995,7 +1044,7 @@ function ChangeAcks({ change, dispatch, notify, onOpen }: { change: Change; disp
   return (
     <div className="ackbox">
       {onOpen && (
-        <button type="button" className="btn btn--link" onClick={onOpen}>
+        <button type="button" className="btn btn--link" data-target={`change:${change.id}`} onClick={onOpen}>
           {change.id}: {change.dishId ? dishName(change.dishId) : change.record} {v.prev} → {v.next}
         </button>
       )}
@@ -1099,7 +1148,7 @@ function ChangeDetail({ change, state, dispatch, onPush, notify }: {
 
       {issue && (
         <Section title="Related issue">
-          <button type="button" className="btn btn--link" onClick={() => onPush({ kind: 'issue', id: issue.id })}>
+          <button type="button" className="btn btn--link" data-target={`issue:${issue.id}`} onClick={() => onPush({ kind: 'issue', id: issue.id })}>
             <SeverityBadge severity={issue.severity} /> {issue.title} · <IssueStatusBadge status={issue.status} />
           </button>
         </Section>
